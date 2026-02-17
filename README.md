@@ -56,8 +56,9 @@ cargo run -- connect status
 cargo run -- connect login --model gpt-5
 cargo run -- connect api sk-xxxx --model gpt-4.1-mini
 cargo run -- connect api sk-ant-xxxx --provider anthropic --model claude-3-7-sonnet-latest
-cargo run -- connect api sk-xxxx --provider zhipu --model glm-5
-# 推荐在对话里走统一流程：/connect <provider> -> 选择 api/login
+cargo run -- connect api sk-xxxx --provider zhipu --zhipu-api-type general --model glm-5
+cargo run -- connect api sk-xxxx --provider zhipu --zhipu-api-type coding --model glm-5
+# 推荐在对话里走统一流程：/connect zhipu -> 选择 api-general / api-coding
 
 # Cron
 cargo run -- cron add "0 9 * * 1-5" "goldagent run \"生成每日计划\""
@@ -82,9 +83,11 @@ cargo run -- skill run daily-summary "今天做了三件事：..."
 - `/connect status`：查看连接状态（厂商/模式/模型/账户/用量）
 - `/connect openai`：进入 OpenAI 连接方式（`login` / `api`）
 - `/connect anthropic`：进入 Anthropic 连接方式（`api`）
-- `/connect zhipu`：进入智谱 GLM 连接方式（`api`）
-- `/connect <provider> api`：进入 API Key 交互输入流程（统一）
-- `/connect <provider> api <KEY> [model]`：直接切换为 API Key 模式（统一）
+- `/connect zhipu`：进入智谱 GLM 连接方式（`api-general` / `api-coding`）
+- `/connect openai|anthropic api`：进入 API Key 交互输入流程
+- `/connect openai|anthropic api <KEY> [model]`：直接切换为 API Key 模式
+- `/connect zhipu api-general`：使用智谱普通 API 端点
+- `/connect zhipu api-coding`：使用智谱 Coding Plan API 端点
 - `/connect openai login [model]`：切换为 OpenAI 登录态
 - `/skill`：进入 skill 选择
 - `/skill <skill名> <输入>`：运行 skill

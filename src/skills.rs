@@ -1,6 +1,6 @@
 use crate::config::AgentPaths;
 use crate::memory;
-use crate::openai::{ChatMessage, OpenAIClient};
+use crate::provider::{ChatMessage, ProviderClient};
 use anyhow::{Result, bail};
 use std::fs;
 use std::path::PathBuf;
@@ -95,7 +95,7 @@ pub fn create_skill(paths: &AgentPaths, name: &str) -> Result<PathBuf> {
 
 pub async fn run_skill(
     paths: &AgentPaths,
-    client: &OpenAIClient,
+    client: &ProviderClient,
     name: &str,
     input: &str,
 ) -> Result<String> {

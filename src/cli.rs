@@ -94,6 +94,8 @@ pub enum ConnectCommand {
         #[arg(long, default_value = "openai")]
         provider: String,
         #[arg(long)]
+        zhipu_api_type: Option<String>,
+        #[arg(long)]
         model: Option<String>,
     },
 }

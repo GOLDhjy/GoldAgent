@@ -482,7 +482,7 @@ mod tests {
         fs::write(&jobs_file, "[]\n").unwrap();
         fs::write(
             &connect_file,
-            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null\n}\n",
+            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null,\n  \"zhipu_api_type\": \"coding\"\n}\n",
         )
         .unwrap();
         fs::write(

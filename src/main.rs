@@ -3,17 +3,17 @@ mod config;
 mod connect;
 mod jobs;
 mod memory;
-mod openai;
+mod provider;
 mod scheduler;
 mod shell;
 mod skills;
 mod usage;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands, ConnectCommand, CronCommand, SkillCommand};
+use cli::{Cli, Commands, CronCommand, SkillCommand};
 use config::AgentPaths;
-use openai::{ChatMessage, OpenAIClient};
+use provider::{ChatMessage, ProviderClient};
 use std::cmp;
 use std::io::{self, Read, Write};
 
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
             }
             memory::append_short_term(&paths, "shell.manual", &format!("$ {cmd}"))?;
         }
-        Commands::Connect { command } => handle_connect_command(&paths, command)?,
+        Commands::Connect { command } => provider::handle_connect_command(&paths, command)?,
         Commands::Cron { command } => handle_cron_command(&paths, command)?,
         Commands::Skill { command } => handle_skill_command(&paths, command).await?,
     }
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_task(paths: &AgentPaths, task: &str, model: Option<String>) -> Result<()> {
-    let client = OpenAIClient::from_paths(paths, model)?;
+    let client = ProviderClient::from_paths(paths, model)?;
     let _ = memory::capture_explicit_remember(paths, "run.task", task)?;
     let system = build_system_prompt(paths, &client, true)?;
 
@@ -76,7 +76,7 @@ async fn run_task(paths: &AgentPaths, task: &str, model: Option<String>) -> Resu
 }
 
 async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
-    let mut client = OpenAIClient::from_paths(paths, model)?;
+    let mut client = ProviderClient::from_paths(paths, model)?;
     let mut messages = vec![ChatMessage::system(build_system_prompt(
         paths, &client, false,
     )?)];
@@ -124,7 +124,7 @@ async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn print_chat_header(client: &OpenAIClient) {
+fn print_chat_header(client: &ProviderClient) {
     println!();
     println!("GoldAgent Chat");
     println!("后端: {}", client.backend_label());
@@ -151,7 +151,11 @@ fn print_assistant_block(response: &str) {
     }
 }
 
-fn build_system_prompt(paths: &AgentPaths, client: &OpenAIClient, concise: bool) -> Result<String> {
+fn build_system_prompt(
+    paths: &AgentPaths,
+    client: &ProviderClient,
+    concise: bool,
+) -> Result<String> {
     let memory_context = memory::tail_context(paths, 4_000)?;
     let mut prompt = String::from("You are GoldAgent, a local assistant.\n");
     if concise {
@@ -170,7 +174,7 @@ Memory context:\n{}",
 
 fn refresh_chat_system_prompt(
     paths: &AgentPaths,
-    client: &OpenAIClient,
+    client: &ProviderClient,
     messages: &mut Vec<ChatMessage>,
 ) -> Result<()> {
     let system = ChatMessage::system(build_system_prompt(paths, client, false)?);
@@ -189,7 +193,7 @@ enum SlashAction {
 
 async fn handle_chat_slash(
     paths: &AgentPaths,
-    client: &mut OpenAIClient,
+    client: &mut ProviderClient,
     input: &str,
     messages: &mut Vec<ChatMessage>,
 ) -> Result<SlashAction> {
@@ -209,69 +213,25 @@ async fn handle_chat_slash(
     }
 
     if input == "/connect" || input == "/connect " {
-        print_connect_help(paths)?;
-        return Ok(SlashAction::Continue);
-    }
-
-    if input == "/connect status" {
-        print_connect_status(paths)?;
+        provider::print_connect_help(paths)?;
         return Ok(SlashAction::Continue);
     }
 
     if let Some(rest) = input.strip_prefix("/connect ") {
-        if handle_connect_chat_command(paths, client, rest)? {
-            refresh_chat_system_prompt(paths, client, messages)?;
-            return Ok(SlashAction::Continue);
-        }
-    }
-
-    if input == "/model" || input == "/model " || input == "/model status" || input == "/model list"
-    {
-        print_model_overview(paths)?;
-        return Ok(SlashAction::Continue);
-    }
-
-    if let Some(rest) = input.strip_prefix("/model set ") {
-        let model = rest.trim();
-        if model.is_empty() {
-            println!("用法：/model set <model>");
-            print_model_overview(paths)?;
-            return Ok(SlashAction::Continue);
-        }
-        connect::set_model(paths, Some(model.to_string()))?;
-        *client = OpenAIClient::from_paths(paths, None)?;
-        refresh_chat_system_prompt(paths, client, messages)?;
-        println!("已切换模型：{}", client.backend_label());
-        return Ok(SlashAction::Continue);
-    }
-
-    if let Some(rest) = input.strip_prefix("/model ") {
-        let model = rest.trim();
-        if model.is_empty() {
-            print_model_overview(paths)?;
-            return Ok(SlashAction::Continue);
-        }
-        if model == "status" || model == "list" {
-            print_model_overview(paths)?;
-            return Ok(SlashAction::Continue);
-        }
-        if let Some(raw) = model.strip_prefix("set ") {
-            let target = raw.trim();
-            if target.is_empty() {
-                println!("用法：/model <model>");
-                print_model_overview(paths)?;
-                return Ok(SlashAction::Continue);
+        let outcome = provider::handle_connect_chat_command(paths, client, rest, prompt_line)?;
+        if outcome.handled {
+            if outcome.client_changed {
+                refresh_chat_system_prompt(paths, client, messages)?;
             }
-            connect::set_model(paths, Some(target.to_string()))?;
-            *client = OpenAIClient::from_paths(paths, None)?;
-            refresh_chat_system_prompt(paths, client, messages)?;
-            println!("已切换模型：{}", client.backend_label());
             return Ok(SlashAction::Continue);
         }
-        connect::set_model(paths, Some(model.to_string()))?;
-        *client = OpenAIClient::from_paths(paths, None)?;
-        refresh_chat_system_prompt(paths, client, messages)?;
-        println!("已切换模型：{}", client.backend_label());
+    }
+
+    let model_outcome = provider::handle_model_chat_command(paths, client, input)?;
+    if model_outcome.handled {
+        if model_outcome.client_changed {
+            refresh_chat_system_prompt(paths, client, messages)?;
+        }
         return Ok(SlashAction::Continue);
     }
 
@@ -339,312 +299,9 @@ fn print_command_palette(paths: &AgentPaths) -> Result<()> {
     println!("- /connect anthropic ...");
     println!("- /connect zhipu ...");
     println!("- /skill <skill名> <输入内容>");
-    print_connect_status(paths)?;
+    provider::print_connect_status(paths)?;
     print_skills_for_chat(paths)?;
     println!();
-    Ok(())
-}
-
-fn print_connect_help(paths: &AgentPaths) -> Result<()> {
-    println!("连接分类：");
-    println!("- /connect openai");
-    println!("- /connect anthropic");
-    println!("- /connect zhipu");
-    println!("统一用法：");
-    println!("- /connect <provider>           先选连接方式（api/login）");
-    println!("- /connect <provider> api       进入 API Key 输入流程");
-    println!("- /connect <provider> api <KEY> [model]");
-    println!("- /connect openai login [model] 仅 OpenAI 支持登录态");
-    println!("通用：");
-    println!("- /connect status");
-    print_connect_status(paths)?;
-    Ok(())
-}
-
-fn provider_command_name(provider: &connect::ConnectProvider) -> &'static str {
-    match provider {
-        connect::ConnectProvider::OpenAi => "openai",
-        connect::ConnectProvider::Anthropic => "anthropic",
-        connect::ConnectProvider::Zhipu => "zhipu",
-    }
-}
-
-fn connect_methods_for_provider(provider: &connect::ConnectProvider) -> &'static [&'static str] {
-    match provider {
-        connect::ConnectProvider::OpenAi => &["login", "api"],
-        connect::ConnectProvider::Anthropic | connect::ConnectProvider::Zhipu => &["api"],
-    }
-}
-
-fn print_provider_connect_methods(provider: &connect::ConnectProvider) {
-    println!("{} 连接方式：", connect::provider_label(provider));
-    for method in connect_methods_for_provider(provider) {
-        match *method {
-            "login" => println!("- login（登录态）"),
-            "api" => println!("- api（API Key）"),
-            _ => {}
-        }
-    }
-}
-
-fn connect_openai_login(
-    paths: &AgentPaths,
-    client: &mut OpenAIClient,
-    model: Option<String>,
-) -> Result<()> {
-    connect::set_login(paths, model)?;
-    *client = OpenAIClient::from_paths(paths, None)?;
-    println!("已切换连接方式：{}", client.backend_label());
-    Ok(())
-}
-
-fn connect_provider_api(
-    paths: &AgentPaths,
-    client: &mut OpenAIClient,
-    provider: connect::ConnectProvider,
-    api_key: String,
-    model: Option<String>,
-) -> Result<()> {
-    connect::set_provider_api(paths, provider, api_key, model)?;
-    *client = OpenAIClient::from_paths(paths, None)?;
-    println!("已切换连接方式：{}", client.backend_label());
-    Ok(())
-}
-
-fn connect_provider_api_interactive(
-    paths: &AgentPaths,
-    client: &mut OpenAIClient,
-    provider: connect::ConnectProvider,
-) -> Result<()> {
-    let env_var = connect::provider_env_var(&provider);
-    let api_key = prompt_line(&format!("请输入 {env_var}（留空取消）: "))?;
-    let api_key = api_key.trim().to_string();
-    if api_key.is_empty() {
-        println!("已取消连接。");
-        return Ok(());
-    }
-
-    let model = prompt_line(&format!(
-        "请输入模型（可选，回车默认 {}）: ",
-        connect::default_model_for_provider(&provider)
-    ))?;
-    let model = if model.trim().is_empty() {
-        None
-    } else {
-        Some(model.trim().to_string())
-    };
-
-    if let Err(err) = connect_provider_api(paths, client, provider, api_key, model) {
-        println!("连接失败：{err}");
-    }
-    Ok(())
-}
-
-fn handle_connect_chat_command(
-    paths: &AgentPaths,
-    client: &mut OpenAIClient,
-    rest: &str,
-) -> Result<bool> {
-    let trimmed = rest.trim();
-    if trimmed.is_empty() {
-        print_connect_help(paths)?;
-        return Ok(true);
-    }
-    if trimmed == "status" {
-        print_connect_status(paths)?;
-        return Ok(true);
-    }
-
-    let mut parts = trimmed.split_whitespace();
-    let Some(provider_token) = parts.next() else {
-        return Ok(false);
-    };
-    let provider = match parse_provider_name(provider_token) {
-        Ok(provider) => provider,
-        Err(_) => return Ok(false),
-    };
-
-    let method = parts.next();
-    match method {
-        None => {
-            print_provider_connect_methods(&provider);
-            let method = prompt_line("请选择连接方式（回车取消）: ")?;
-            let method = method.trim().to_ascii_lowercase();
-            if method.is_empty() {
-                println!("已取消连接。");
-                return Ok(true);
-            }
-            match method.as_str() {
-                "login" => {
-                    if !matches!(provider, connect::ConnectProvider::OpenAi) {
-                        println!(
-                            "{} 目前仅支持 api 方式。",
-                            connect::provider_label(&provider)
-                        );
-                        return Ok(true);
-                    }
-                    let model = prompt_line("请输入模型（可选，回车默认模型）: ")?;
-                    let model = if model.trim().is_empty() {
-                        None
-                    } else {
-                        Some(model.trim().to_string())
-                    };
-                    connect_openai_login(paths, client, model)?;
-                }
-                "api" => {
-                    connect_provider_api_interactive(paths, client, provider.clone())?;
-                }
-                _ => {
-                    let allowed = connect_methods_for_provider(&provider).join(" / ");
-                    println!("不支持的连接方式：{method}。可选：{allowed}");
-                }
-            }
-            Ok(true)
-        }
-        Some("login") => {
-            if !matches!(provider, connect::ConnectProvider::OpenAi) {
-                println!(
-                    "{} 不支持 login，仅支持 api。",
-                    connect::provider_label(&provider)
-                );
-                return Ok(true);
-            }
-            let model = parts.next().map(str::to_string);
-            connect_openai_login(paths, client, model)?;
-            Ok(true)
-        }
-        Some("api") => {
-            if let Some(api_key) = parts.next() {
-                let model = parts.next().map(str::to_string);
-                if let Err(err) = connect_provider_api(
-                    paths,
-                    client,
-                    provider.clone(),
-                    api_key.to_string(),
-                    model,
-                ) {
-                    println!("连接失败：{err}");
-                }
-                return Ok(true);
-            }
-            connect_provider_api_interactive(paths, client, provider.clone())?;
-            Ok(true)
-        }
-        Some(other) => {
-            let allowed = connect_methods_for_provider(&provider).join(" / ");
-            println!(
-                "{} 不支持连接方式：{other}。可选：{allowed}",
-                provider_command_name(&provider)
-            );
-            Ok(true)
-        }
-    }
-}
-
-fn print_model_overview(paths: &AgentPaths) -> Result<()> {
-    let cfg = connect::load(paths)?;
-    let current = cfg
-        .model
-        .as_deref()
-        .unwrap_or(connect::default_model_for_provider(&cfg.provider))
-        .to_string();
-    let mut models = suggested_models(&cfg.provider)
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if !models.iter().any(|m| m == &current) {
-        models.insert(0, current.clone());
-    }
-
-    println!("当前模型状态：");
-    println!("- 厂商: {}", connect::provider_label(&cfg.provider));
-    println!("- 当前模型: {current}");
-    println!("可选模型（上下选择可补全）：");
-    for model in models {
-        if model == current {
-            println!("- {model}  [当前]");
-        } else {
-            println!("- {model}");
-        }
-    }
-    println!("- 说明: 列表是内置推荐，若新版本未收录可直接输入 `/model <模型名>`。");
-    Ok(())
-}
-
-fn suggested_models(provider: &connect::ConnectProvider) -> Vec<&'static str> {
-    match provider {
-        connect::ConnectProvider::OpenAi => vec!["gpt-5", "gpt-4.1", "gpt-4.1-mini"],
-        connect::ConnectProvider::Anthropic => {
-            vec!["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest"]
-        }
-        connect::ConnectProvider::Zhipu => vec![
-            "glm-5",
-            "glm-4.7",
-            "glm-4.7-flash",
-            "glm-4.7-flashx",
-            "glm-4.6",
-            "glm-4.5-airx",
-            "glm-4.5-flash",
-        ],
-    }
-}
-
-fn print_connect_status(paths: &AgentPaths) -> Result<()> {
-    let cfg = connect::load(paths)?;
-    let client = OpenAIClient::from_paths(paths, None)?;
-    let usage_stats = usage::load(&paths.usage_file).unwrap_or_default();
-    let today_key = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let today = usage_stats
-        .by_day
-        .get(&today_key)
-        .cloned()
-        .unwrap_or_default();
-    let current_model_key = client.usage_model_key();
-    let current_model_usage = usage_stats
-        .by_model
-        .get(&current_model_key)
-        .cloned()
-        .unwrap_or_default();
-
-    println!("当前连接状态：");
-    println!("- 厂商: {}", connect::provider_label(&cfg.provider));
-    println!("- 模式: {}", connect::mode_label(&cfg.mode));
-    println!("- 生效后端: {}", client.backend_label());
-    println!(
-        "- 配置模型: {}",
-        cfg.model.as_deref().unwrap_or("默认模型（由后端决定）")
-    );
-    println!("- 账户信息: {}", connect::account_label(&cfg));
-    if matches!(cfg.mode, connect::ConnectMode::OpenAIApi) {
-        match connect::effective_api_key(&cfg) {
-            Some(key) => {
-                if let Err(err) = connect::validate_api_key(&cfg.provider, &key) {
-                    println!("- 警告: 当前 API Key 可能无效：{err}");
-                }
-            }
-            None => {
-                println!("- 警告: 当前为 API 模式但未配置 API Key");
-            }
-        }
-    }
-    println!(
-        "- 用量累计: 请求 {} 次, 输入 {} tokens, 输出 {} tokens",
-        usage_stats.total.requests, usage_stats.total.input_tokens, usage_stats.total.output_tokens
-    );
-    println!(
-        "- 用量今日({}): 请求 {} 次, 输入 {} tokens, 输出 {} tokens",
-        today_key, today.requests, today.input_tokens, today.output_tokens
-    );
-    println!(
-        "- 当前模型用量({}): 请求 {} 次, 输入 {} tokens, 输出 {} tokens",
-        current_model_key,
-        current_model_usage.requests,
-        current_model_usage.input_tokens,
-        current_model_usage.output_tokens
-    );
-    if matches!(cfg.mode, connect::ConnectMode::CodexLogin) {
-        println!("- 说明: 登录态模式暂无法获取官方 token 用量，tokens 仅在 API 模式下统计。");
-    }
     Ok(())
 }
 
@@ -680,12 +337,7 @@ fn command_suggestions(input: &str) -> Vec<String> {
     out
 }
 
-#[derive(Clone)]
-struct HintItem {
-    label: String,
-    desc: String,
-    completion: String,
-}
+type HintItem = provider::HintItem;
 
 fn base_command_items() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![
@@ -704,261 +356,6 @@ fn single_command_hint(label: &str, desc: &str, completion: &str) -> Vec<HintIte
         desc: desc.to_string(),
         completion: completion.to_string(),
     }]
-}
-
-fn connect_hint_items(rest: &str) -> Vec<HintItem> {
-    let trimmed = rest.trim();
-    let top_level = [
-        ("openai", "OpenAI（login/api）", "/connect openai "),
-        (
-            "anthropic",
-            "Anthropic（Claude，api）",
-            "/connect anthropic ",
-        ),
-        ("zhipu", "智谱 GLM（api）", "/connect zhipu "),
-        ("status", "查看连接/模型/账户/用量", "/connect status"),
-    ];
-
-    if trimmed.is_empty() {
-        return top_level
-            .iter()
-            .map(|(name, desc, completion)| HintItem {
-                label: (*name).to_string(),
-                desc: (*desc).to_string(),
-                completion: (*completion).to_string(),
-            })
-            .collect();
-    }
-
-    if trimmed == "status" {
-        return vec![HintItem {
-            label: "status".to_string(),
-            desc: "回车查看连接/模型/账户/用量".to_string(),
-            completion: "/connect status".to_string(),
-        }];
-    }
-
-    if let Ok(provider) = parse_provider_name(trimmed) {
-        return connect_methods_for_provider(&provider)
-            .iter()
-            .map(|method| {
-                let completion = match *method {
-                    "login" => format!("/connect {} login", provider_command_name(&provider)),
-                    "api" => format!("/connect {} api ", provider_command_name(&provider)),
-                    _ => format!("/connect {} ", provider_command_name(&provider)),
-                };
-                let desc = match *method {
-                    "login" => "使用登录态（仅 OpenAI）",
-                    "api" => "使用 API Key",
-                    _ => "",
-                };
-                HintItem {
-                    label: (*method).to_string(),
-                    desc: desc.to_string(),
-                    completion,
-                }
-            })
-            .collect();
-    }
-
-    if !trimmed.contains(' ') {
-        let mut items = top_level
-            .iter()
-            .filter(|(name, _, _)| name.starts_with(trimmed))
-            .map(|(name, desc, completion)| HintItem {
-                label: (*name).to_string(),
-                desc: (*desc).to_string(),
-                completion: (*completion).to_string(),
-            })
-            .collect::<Vec<_>>();
-        if items.is_empty() {
-            items.push(HintItem {
-                label: "未匹配到 connect 子命令".to_string(),
-                desc: "可选: openai / anthropic / zhipu / status".to_string(),
-                completion: "/connect ".to_string(),
-            });
-        }
-        return items;
-    }
-
-    let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-    let provider = match tokens
-        .first()
-        .and_then(|name| parse_provider_name(name).ok())
-    {
-        Some(provider) => provider,
-        None => {
-            return vec![HintItem {
-                label: "connect".to_string(),
-                desc: "可选: openai / anthropic / zhipu / status".to_string(),
-                completion: "/connect ".to_string(),
-            }];
-        }
-    };
-    let provider_cmd = provider_command_name(&provider);
-    let methods = connect_methods_for_provider(&provider);
-    let method_token = tokens.get(1).copied().unwrap_or_default();
-
-    if tokens.len() == 2 && !methods.iter().any(|m| *m == method_token) {
-        let mut items = methods
-            .iter()
-            .filter(|method| method.starts_with(method_token))
-            .map(|method| {
-                let completion = match *method {
-                    "login" => format!("/connect {provider_cmd} login"),
-                    "api" => format!("/connect {provider_cmd} api "),
-                    _ => format!("/connect {provider_cmd} "),
-                };
-                let desc = match *method {
-                    "login" => "使用登录态（仅 OpenAI）",
-                    "api" => "使用 API Key",
-                    _ => "",
-                };
-                HintItem {
-                    label: (*method).to_string(),
-                    desc: desc.to_string(),
-                    completion,
-                }
-            })
-            .collect::<Vec<_>>();
-        if items.is_empty() {
-            items.push(HintItem {
-                label: provider_cmd.to_string(),
-                desc: format!("可选方式: {}", methods.join(" / ")),
-                completion: format!("/connect {provider_cmd} "),
-            });
-        }
-        return items;
-    }
-
-    match method_token {
-        "login" => {
-            if !matches!(provider, connect::ConnectProvider::OpenAi) {
-                return vec![HintItem {
-                    label: "api".to_string(),
-                    desc: "该厂商仅支持 API Key".to_string(),
-                    completion: format!("/connect {provider_cmd} api "),
-                }];
-            }
-
-            if tokens.len() <= 2 {
-                let mut items = vec![HintItem {
-                    label: "执行切换".to_string(),
-                    desc: "回车切换到 OpenAI 登录态".to_string(),
-                    completion: format!("/connect {provider_cmd} login"),
-                }];
-                for model in suggested_models(&connect::ConnectProvider::OpenAi) {
-                    items.push(HintItem {
-                        label: model.to_string(),
-                        desc: "登录态指定模型".to_string(),
-                        completion: format!("/connect {provider_cmd} login {model}"),
-                    });
-                }
-                return items;
-            }
-
-            let model_prefix = tokens.get(2).copied().unwrap_or_default();
-            let mut items = vec![HintItem {
-                label: "执行切换".to_string(),
-                desc: "回车切换到 OpenAI 登录态".to_string(),
-                completion: format!("/connect {provider_cmd} login {model_prefix}"),
-            }];
-            for model in suggested_models(&connect::ConnectProvider::OpenAi) {
-                if model.starts_with(model_prefix) {
-                    items.push(HintItem {
-                        label: model.to_string(),
-                        desc: "登录态指定模型".to_string(),
-                        completion: format!("/connect {provider_cmd} login {model}"),
-                    });
-                }
-            }
-            return items;
-        }
-        "api" => {
-            if tokens.len() == 2 {
-                return vec![HintItem {
-                    label: format!("<{}>", connect::provider_env_var(&provider)),
-                    desc: "粘贴 key，可选再跟 model".to_string(),
-                    completion: format!("/connect {provider_cmd} api "),
-                }];
-            }
-            let key = tokens.get(2).copied().unwrap_or_default();
-            if key.is_empty() {
-                return vec![HintItem {
-                    label: format!("<{}>", connect::provider_env_var(&provider)),
-                    desc: "粘贴 key，可选再跟 model".to_string(),
-                    completion: format!("/connect {provider_cmd} api "),
-                }];
-            }
-            let model_prefix = tokens.get(3).copied().unwrap_or_default();
-            let mut items = vec![HintItem {
-                label: "执行切换".to_string(),
-                desc: "回车切换到 API 模式".to_string(),
-                completion: format!("/connect {provider_cmd} api {key}"),
-            }];
-            for model in suggested_models(&provider) {
-                if model.starts_with(model_prefix) {
-                    items.push(HintItem {
-                        label: model.to_string(),
-                        desc: format!("{} 模型", connect::provider_label(&provider)),
-                        completion: format!("/connect {provider_cmd} api {key} {model}"),
-                    });
-                }
-            }
-            return items;
-        }
-        _ => {}
-    }
-
-    vec![HintItem {
-        label: provider_cmd.to_string(),
-        desc: format!("可选方式: {}", methods.join(" / ")),
-        completion: format!("/connect {provider_cmd} "),
-    }]
-}
-
-fn model_hint_items(paths: &AgentPaths, rest: &str) -> Vec<HintItem> {
-    let trimmed = rest.trim();
-    let cfg = match connect::load(paths) {
-        Ok(cfg) => cfg,
-        Err(_) => return Vec::new(),
-    };
-    let current = cfg
-        .model
-        .as_deref()
-        .unwrap_or(connect::default_model_for_provider(&cfg.provider))
-        .to_string();
-    let mut models = suggested_models(&cfg.provider)
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if !models.iter().any(|m| m == &current) {
-        models.insert(0, current.clone());
-    }
-
-    let mut items = models
-        .iter()
-        .filter(|m| trimmed.is_empty() || m.starts_with(trimmed))
-        .map(|m| HintItem {
-            label: m.clone(),
-            desc: if *m == current {
-                "当前模型".to_string()
-            } else {
-                "回车切换到该模型".to_string()
-            },
-            completion: format!("/model {m}"),
-        })
-        .collect::<Vec<_>>();
-
-    if items.is_empty() && !trimmed.is_empty() {
-        items.push(HintItem {
-            label: trimmed.to_string(),
-            desc: "自定义模型（回车切换）".to_string(),
-            completion: format!("/model {trimmed}"),
-        });
-    }
-
-    items
 }
 
 fn command_inline_hint_items(paths: &AgentPaths, input: &str) -> Vec<HintItem> {
@@ -998,7 +395,7 @@ fn command_inline_hint_items(paths: &AgentPaths, input: &str) -> Vec<HintItem> {
     }
 
     if let Some(rest) = input.strip_prefix("/connect ") {
-        return connect_hint_items(rest);
+        return provider::connect_hint_items(rest);
     }
 
     if input == "/model" {
@@ -1006,7 +403,7 @@ fn command_inline_hint_items(paths: &AgentPaths, input: &str) -> Vec<HintItem> {
     }
 
     if let Some(rest) = input.strip_prefix("/model ") {
-        return model_hint_items(paths, rest);
+        return provider::model_hint_items(paths, rest);
     }
 
     if input == "/skill" {
@@ -1423,7 +820,7 @@ async fn handle_skill_command(paths: &AgentPaths, command: SkillCommand) -> Resu
             let _ = memory::auto_capture_event(paths, "skill.new", &event)?;
         }
         SkillCommand::Run { name, input, model } => {
-            let client = OpenAIClient::from_paths(paths, model)?;
+            let client = ProviderClient::from_paths(paths, model)?;
             let response = run_skill_and_record(paths, &client, &name, &input).await?;
             println!("{response}");
         }
@@ -1431,42 +828,9 @@ async fn handle_skill_command(paths: &AgentPaths, command: SkillCommand) -> Resu
     Ok(())
 }
 
-fn handle_connect_command(paths: &AgentPaths, command: ConnectCommand) -> Result<()> {
-    match command {
-        ConnectCommand::Status => {
-            print_connect_status(paths)?;
-        }
-        ConnectCommand::Login { model } => {
-            connect::set_login(paths, model)?;
-            let client = OpenAIClient::from_paths(paths, None)?;
-            println!("已切换连接方式：{}", client.backend_label());
-        }
-        ConnectCommand::Api {
-            api_key,
-            provider,
-            model,
-        } => {
-            let provider = parse_provider_name(&provider)?;
-            connect::set_provider_api(paths, provider, api_key, model)?;
-            let client = OpenAIClient::from_paths(paths, None)?;
-            println!("已切换连接方式：{}", client.backend_label());
-        }
-    }
-    Ok(())
-}
-
-fn parse_provider_name(name: &str) -> Result<connect::ConnectProvider> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "openai" => Ok(connect::ConnectProvider::OpenAi),
-        "zhipu" | "glm" => Ok(connect::ConnectProvider::Zhipu),
-        "anthropic" | "claude" => Ok(connect::ConnectProvider::Anthropic),
-        other => bail!("不支持的 provider: {other}。可选: openai, zhipu, anthropic"),
-    }
-}
-
 async fn run_skill_and_record(
     paths: &AgentPaths,
-    client: &OpenAIClient,
+    client: &ProviderClient,
     name: &str,
     input: &str,
 ) -> Result<String> {

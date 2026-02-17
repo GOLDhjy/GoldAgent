@@ -49,7 +49,7 @@ impl AgentPaths {
         ensure_file_with(&self.jobs_file, "[]\n")?;
         ensure_file_with(
             &self.connect_file,
-            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null\n}\n",
+            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null,\n  \"zhipu_api_type\": \"coding\"\n}\n",
         )?;
         ensure_file_with(
             &self.usage_file,

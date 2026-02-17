@@ -24,6 +24,14 @@ pub enum ConnectMode {
     OpenAIApi,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ZhipuApiType {
+    General,
+    #[default]
+    Coding,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectConfig {
     #[serde(default)]
@@ -32,6 +40,8 @@ pub struct ConnectConfig {
     pub model: Option<String>,
     #[serde(default, alias = "openai_api_key")]
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub zhipu_api_type: ZhipuApiType,
 }
 
 impl Default for ConnectConfig {
@@ -41,6 +51,7 @@ impl Default for ConnectConfig {
             mode: ConnectMode::CodexLogin,
             model: None,
             api_key: None,
+            zhipu_api_type: ZhipuApiType::Coding,
         }
     }
 }
@@ -78,6 +89,7 @@ pub fn set_provider_api(
     provider: ConnectProvider,
     api_key: String,
     model: Option<String>,
+    zhipu_api_type: Option<ZhipuApiType>,
 ) -> Result<ConnectConfig> {
     validate_api_key(&provider, &api_key)?;
     let mut cfg = load(paths).unwrap_or_default();
@@ -85,6 +97,15 @@ pub fn set_provider_api(
     cfg.provider = provider.clone();
     cfg.mode = ConnectMode::OpenAIApi;
     cfg.api_key = Some(api_key);
+    if matches!(provider, ConnectProvider::Zhipu) {
+        cfg.zhipu_api_type = zhipu_api_type.unwrap_or_else(|| {
+            if provider_changed {
+                ZhipuApiType::Coding
+            } else {
+                cfg.zhipu_api_type
+            }
+        });
+    }
     if let Some(model) = model {
         cfg.model = Some(normalize_model_for_provider(&provider, &model));
     } else if provider_changed || cfg.model.is_none() {
@@ -218,6 +239,13 @@ pub fn provider_env_var(provider: &ConnectProvider) -> &'static str {
         ConnectProvider::OpenAi => "OPENAI_API_KEY",
         ConnectProvider::Anthropic => "ANTHROPIC_API_KEY",
         ConnectProvider::Zhipu => "ZHIPU_API_KEY",
+    }
+}
+
+pub fn zhipu_api_type_label(kind: ZhipuApiType) -> &'static str {
+    match kind {
+        ZhipuApiType::General => "普通 API",
+        ZhipuApiType::Coding => "Coding Plan API",
     }
 }
 
