@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -10,25 +10,17 @@ pub struct ShellOutput {
 
 pub async fn run_shell_command(command: &str, force: bool) -> Result<ShellOutput> {
     if is_dangerous(command) && !force {
-        bail!(
-            "Blocked potentially dangerous command. Re-run with --force if this is intentional."
-        );
+        bail!("Blocked potentially dangerous command. Re-run with --force if this is intentional.");
     }
 
-    let output = Command::new("zsh")
-        .arg("-lc")
-        .arg(command)
-        .output()
-        .await?;
+    let output = Command::new("zsh").arg("-lc").arg(command).output().await?;
 
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if !output.status.success() {
-        bail!(
-            "Command failed with code {exit_code}.\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        );
+        bail!("Command failed with code {exit_code}.\nstdout:\n{stdout}\nstderr:\n{stderr}");
     }
 
     Ok(ShellOutput {

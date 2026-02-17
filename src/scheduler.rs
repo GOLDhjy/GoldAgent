@@ -7,7 +7,7 @@ use chrono::Utc;
 use cron::Schedule;
 use std::str::FromStr;
 use tokio::signal;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 pub async fn serve(paths: AgentPaths) -> Result<()> {
     let jobs = jobs::load_jobs(&paths)?;

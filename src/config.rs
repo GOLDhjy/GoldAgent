@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -8,19 +9,27 @@ pub struct AgentPaths {
     pub memory_file: PathBuf,
     pub memory_dir: PathBuf,
     pub jobs_file: PathBuf,
+    pub connect_file: PathBuf,
+    pub usage_file: PathBuf,
     pub logs_dir: PathBuf,
     pub skills_dir: PathBuf,
 }
 
 impl AgentPaths {
     pub fn new() -> Result<Self> {
-        let home = dirs::home_dir().context("无法解析 HOME 目录")?;
-        let root = home.join(".goldagent");
+        let root = if let Ok(path) = env::var("GOLDAGENT_HOME") {
+            PathBuf::from(path)
+        } else {
+            let home = dirs::home_dir().context("无法解析 HOME 目录")?;
+            home.join(".goldagent")
+        };
 
         Ok(Self {
             memory_file: root.join("MEMORY.md"),
             memory_dir: root.join("memory"),
             jobs_file: root.join("jobs.json"),
+            connect_file: root.join("connect.json"),
+            usage_file: root.join("usage.json"),
             logs_dir: root.join("logs"),
             skills_dir: root.join("skills"),
             root,
@@ -38,6 +47,14 @@ impl AgentPaths {
             "# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n\n",
         )?;
         ensure_file_with(&self.jobs_file, "[]\n")?;
+        ensure_file_with(
+            &self.connect_file,
+            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null\n}\n",
+        )?;
+        ensure_file_with(
+            &self.usage_file,
+            "{\n  \"total\": {\"requests\": 0, \"input_tokens\": 0, \"output_tokens\": 0},\n  \"by_day\": {},\n  \"by_model\": {},\n  \"updated_at\": null\n}\n",
+        )?;
         self.seed_default_skill()?;
         Ok(())
     }

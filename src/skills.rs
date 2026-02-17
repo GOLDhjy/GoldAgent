@@ -1,7 +1,7 @@
 use crate::config::AgentPaths;
 use crate::memory;
 use crate::openai::{ChatMessage, OpenAIClient};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::fs;
 use std::path::PathBuf;
 

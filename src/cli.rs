@@ -30,6 +30,11 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         force: bool,
     },
+    /// 连接模型后端（登录态/API Key）
+    Connect {
+        #[command(subcommand)]
+        command: ConnectCommand,
+    },
     /// Cron 定时任务命令
     Cron {
         #[command(subcommand)]
@@ -56,9 +61,7 @@ pub enum CronCommand {
     /// 列出所有 cron 任务
     List,
     /// 删除一条 cron 任务
-    Remove {
-        id: String,
-    },
+    Remove { id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -66,13 +69,30 @@ pub enum SkillCommand {
     /// 列出已安装的技能
     List,
     /// 创建一个新的技能模板
-    New {
-        name: String,
-    },
+    New { name: String },
     /// 运行一个技能并传入输入内容
     Run {
         name: String,
         input: String,
+        #[arg(long)]
+        model: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConnectCommand {
+    /// 查看当前连接状态
+    Status,
+    /// 使用登录态（可选指定 model）
+    Login {
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// 使用 API Key（可通过 --provider 选择厂商）
+    Api {
+        api_key: String,
+        #[arg(long, default_value = "openai")]
+        provider: String,
         #[arg(long)]
         model: Option<String>,
     },

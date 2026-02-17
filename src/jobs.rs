@@ -1,5 +1,5 @@
 use crate::config::AgentPaths;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use cron::Schedule;
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,6 @@ pub fn normalize_schedule(expr: &str) -> Result<String> {
 
 pub fn validate_schedule(expr: &str) -> Result<()> {
     let normalized = normalize_schedule(expr)?;
-    Schedule::from_str(&normalized)
-        .with_context(|| format!("Invalid cron expression: {expr}"))?;
+    Schedule::from_str(&normalized).with_context(|| format!("Invalid cron expression: {expr}"))?;
     Ok(())
 }

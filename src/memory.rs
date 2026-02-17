@@ -129,11 +129,7 @@ pub fn auto_capture_event(paths: &AgentPaths, source: &str, event_text: &str) ->
     let mut seen = HashSet::new();
     let mut added = Vec::new();
 
-    let tags = vec![
-        "auto".to_string(),
-        source.to_string(),
-        "event".to_string(),
-    ];
+    let tags = vec!["auto".to_string(), source.to_string(), "event".to_string()];
     try_capture_candidate(
         paths,
         &mut memory_index,
@@ -146,7 +142,11 @@ pub fn auto_capture_event(paths: &AgentPaths, source: &str, event_text: &str) ->
     Ok(!added.is_empty())
 }
 
-pub fn capture_explicit_remember(paths: &AgentPaths, source: &str, text: &str) -> Result<Vec<String>> {
+pub fn capture_explicit_remember(
+    paths: &AgentPaths,
+    source: &str,
+    text: &str,
+) -> Result<Vec<String>> {
     let mut memory_index =
         normalize_for_compare(&fs::read_to_string(&paths.memory_file).unwrap_or_default());
     let mut seen = HashSet::new();
@@ -254,16 +254,7 @@ fn is_repeat_candidate(sentence: &str) -> bool {
         return false;
     }
     let lowered = sentence.trim().to_lowercase();
-    let trivial = [
-        "你好",
-        "谢谢",
-        "好的",
-        "嗯",
-        "ok",
-        "okay",
-        "hi",
-        "hello",
-    ];
+    let trivial = ["你好", "谢谢", "好的", "嗯", "ok", "okay", "hi", "hello"];
     if trivial.iter().any(|word| lowered == *word) {
         return false;
     }
