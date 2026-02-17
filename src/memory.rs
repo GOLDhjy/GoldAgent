@@ -432,18 +432,32 @@ mod tests {
         fs::create_dir_all(&skills_dir).unwrap();
         let memory_file = root.join("MEMORY.md");
         let jobs_file = root.join("jobs.json");
+        let connect_file = root.join("connect.json");
+        let usage_file = root.join("usage.json");
         fs::write(
             &memory_file,
             "# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n\n",
         )
         .unwrap();
         fs::write(&jobs_file, "[]\n").unwrap();
+        fs::write(
+            &connect_file,
+            "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            &usage_file,
+            "{\n  \"total\": {\"requests\": 0, \"input_tokens\": 0, \"output_tokens\": 0},\n  \"by_day\": {},\n  \"by_model\": {},\n  \"updated_at\": null\n}\n",
+        )
+        .unwrap();
 
         AgentPaths {
             root,
             memory_file,
             memory_dir,
             jobs_file,
+            connect_file,
+            usage_file,
             logs_dir,
             skills_dir,
         }
