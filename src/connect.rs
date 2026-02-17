@@ -124,8 +124,8 @@ pub fn set_model(paths: &AgentPaths, model: Option<String>) -> Result<ConnectCon
 
 pub fn default_model_for_provider(provider: &ConnectProvider) -> &'static str {
     match provider {
-        ConnectProvider::OpenAi => "gpt-4.1-mini",
-        ConnectProvider::Anthropic => "claude-3-5-sonnet-latest",
+        ConnectProvider::OpenAi => "gpt-5.2",
+        ConnectProvider::Anthropic => "claude-sonnet-4-5",
         ConnectProvider::Zhipu => "glm-5",
     }
 }
@@ -137,6 +137,8 @@ pub fn normalize_model_for_provider(provider: &ConnectProvider, model: &str) -> 
     }
 
     match provider {
+        ConnectProvider::OpenAi => normalize_openai_model(trimmed),
+        ConnectProvider::Anthropic => normalize_anthropic_model(trimmed),
         ConnectProvider::Zhipu => {
             let lower = trimmed.to_ascii_lowercase();
             match lower.as_str() {
@@ -147,7 +149,85 @@ pub fn normalize_model_for_provider(provider: &ConnectProvider, model: &str) -> 
                 _ => trimmed.to_string(),
             }
         }
-        ConnectProvider::OpenAi | ConnectProvider::Anthropic => trimmed.to_string(),
+    }
+}
+
+fn normalize_openai_model(trimmed: &str) -> String {
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(effort) = parse_openai_codex_effort(&lower) {
+        return format!("gpt-5.2-codex@{effort}");
+    }
+    match lower.as_str() {
+        "gpt5.2" | "gpt-5-2" => "gpt-5.2".to_string(),
+        "gpt5" | "gpt5.0" | "gpt-5.0" => "gpt-5".to_string(),
+        "gpt5-mini" | "gpt5mini" | "gpt-5mini" => "gpt-5-mini".to_string(),
+        "gpt5-nano" | "gpt5nano" | "gpt-5nano" => "gpt-5-nano".to_string(),
+        "gpt-5-codex" | "gpt5-codex" | "gpt5.2-codex" => "gpt-5.2-codex".to_string(),
+        _ => trimmed.to_string(),
+    }
+}
+
+fn parse_openai_codex_effort(lower: &str) -> Option<&'static str> {
+    let normalized = lower.replace('_', "-");
+    let parts = normalized.split_whitespace().collect::<Vec<_>>();
+    if parts.len() == 2 && is_openai_codex_alias(parts[0]) {
+        return normalize_codex_effort_token(parts[1]);
+    }
+    if let Some((base, effort)) = normalized.rsplit_once('@')
+        && is_openai_codex_alias(base)
+    {
+        return normalize_codex_effort_token(effort);
+    }
+    if let Some((base, effort)) = normalized.rsplit_once(':')
+        && is_openai_codex_alias(base)
+    {
+        return normalize_codex_effort_token(effort);
+    }
+    if let Some((base, effort)) = normalized.rsplit_once('/')
+        && is_openai_codex_alias(base)
+    {
+        return normalize_codex_effort_token(effort);
+    }
+    for prefix in [
+        "gpt-5.2-codex-",
+        "gpt-5-codex-",
+        "gpt5.2-codex-",
+        "gpt5-codex-",
+    ] {
+        if let Some(raw_effort) = normalized.strip_prefix(prefix) {
+            return normalize_codex_effort_token(raw_effort);
+        }
+    }
+    None
+}
+
+fn normalize_codex_effort_token(token: &str) -> Option<&'static str> {
+    match token.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "low" => Some("low"),
+        "medium" | "med" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" | "x-high" | "very-high" => Some("xhigh"),
+        _ => None,
+    }
+}
+
+fn is_openai_codex_alias(model: &str) -> bool {
+    matches!(
+        model.trim(),
+        "gpt-5.2-codex" | "gpt-5-codex" | "gpt5.2-codex" | "gpt5-codex"
+    )
+}
+
+fn normalize_anthropic_model(trimmed: &str) -> String {
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "claude-opus-4.6" | "claude-opus-4-6-latest" => "claude-opus-4-6".to_string(),
+        "claude-sonnet-4.5" | "claude-sonnet-4-5-latest" => "claude-sonnet-4-5".to_string(),
+        "claude-haiku-4.5" | "claude-haiku-4-5-latest" => "claude-haiku-4-5".to_string(),
+        "claude-sonnet-4.0" | "claude-sonnet-4" => "claude-sonnet-4".to_string(),
+        "claude-opus-4.1" | "claude-opus-4-1-latest" => "claude-opus-4-1".to_string(),
+        "claude-opus-4.0" | "claude-opus-4" => "claude-opus-4".to_string(),
+        _ => trimmed.to_string(),
     }
 }
 
@@ -229,9 +309,12 @@ fn looks_like_model_name(s: &str) -> bool {
     lower.starts_with("gpt-")
         || lower.starts_with("glm-")
         || lower.starts_with("claude-")
+        || lower.contains("-codex")
         || lower.contains("-mini")
         || lower.contains("-flash")
         || lower.contains("-sonnet")
+        || lower.contains("-haiku")
+        || lower.contains("-opus")
 }
 
 pub fn provider_env_var(provider: &ConnectProvider) -> &'static str {

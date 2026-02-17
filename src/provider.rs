@@ -15,6 +15,13 @@ use uuid::Uuid;
 const ZHIPU_GENERAL_CHAT_ENDPOINT: &str = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const ZHIPU_CODING_CHAT_ENDPOINT: &str =
     "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions";
+const OPENAI_CODEX_BASE_MODEL: &str = "gpt-5.2-codex";
+const OPENAI_CODEX_TIER_MODELS: [&str; 4] = [
+    "gpt-5.2-codex@low",
+    "gpt-5.2-codex@medium",
+    "gpt-5.2-codex@high",
+    "gpt-5.2-codex@xhigh",
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
@@ -127,7 +134,7 @@ impl ProviderClient {
 
         if let Ok(api_key) = env::var("OPENAI_API_KEY") {
             if !api_key.trim().is_empty() {
-                let direct_model = model.unwrap_or_else(|| "gpt-4.1-mini".to_string());
+                let direct_model = model.unwrap_or_else(|| "gpt-5.2".to_string());
                 return Self::build_api_backend(
                     &api_key,
                     ConnectProvider::OpenAi,
@@ -158,7 +165,16 @@ impl ProviderClient {
                         chat_via_anthropic_api(http, endpoint, model, messages).await?
                     }
                     ConnectProvider::OpenAi | ConnectProvider::Zhipu => {
-                        chat_via_openai_compatible_api(http, endpoint, model, messages).await?
+                        let (resolved_model, reasoning_effort) =
+                            resolve_openai_compatible_model(provider, model);
+                        chat_via_openai_compatible_api(
+                            http,
+                            endpoint,
+                            &resolved_model,
+                            messages,
+                            reasoning_effort,
+                        )
+                        .await?
                     }
                 };
                 self.record_usage(UsageEvent {
@@ -361,6 +377,15 @@ pub fn print_model_overview(paths: &AgentPaths) -> Result<()> {
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::OpenAIApi)
+    {
+        for codex_tier in OPENAI_CODEX_TIER_MODELS {
+            if !models.iter().any(|m| m == codex_tier) {
+                models.push(codex_tier.to_string());
+            }
+        }
+    }
     if !models.iter().any(|m| m == &current) {
         models.insert(0, current.clone());
     }
@@ -375,6 +400,13 @@ pub fn print_model_overview(paths: &AgentPaths) -> Result<()> {
         } else {
             println!("- {model}");
         }
+    }
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::OpenAIApi)
+    {
+        println!(
+            "- Codex 分档: `gpt-5.2-codex@low|medium|high|xhigh`（使用官方 reasoning effort）"
+        );
     }
     println!("- 说明: 列表是内置推荐，若新版本未收录可直接输入 `/model <模型名>`。");
     Ok(())
@@ -449,17 +481,16 @@ pub fn print_connect_status(paths: &AgentPaths) -> Result<()> {
 
 pub fn suggested_models(provider: &ConnectProvider) -> Vec<&'static str> {
     match provider {
-        ConnectProvider::OpenAi => vec!["gpt-5", "gpt-4.1", "gpt-4.1-mini"],
-        ConnectProvider::Anthropic => vec!["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest"],
-        ConnectProvider::Zhipu => vec![
-            "glm-5",
-            "glm-4.7",
-            "glm-4.7-flash",
-            "glm-4.7-flashx",
-            "glm-4.6",
-            "glm-4.5-airx",
-            "glm-4.5-flash",
+        ConnectProvider::OpenAi => vec![
+            "gpt-5.2",
+            "gpt-5.2-codex",
         ],
+        ConnectProvider::Anthropic => vec![
+            "claude-opus-4-6",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+        ],
+        ConnectProvider::Zhipu => vec!["glm-5", "glm-4.7", "glm-4.7-flash"],
     }
 }
 
@@ -707,6 +738,17 @@ pub fn connect_hint_items(rest: &str) -> Vec<HintItem> {
                     });
                 }
             }
+            if matches!(provider, ConnectProvider::OpenAi) {
+                for model in OPENAI_CODEX_TIER_MODELS {
+                    if model.starts_with(model_prefix) {
+                        items.push(HintItem {
+                            label: model.to_string(),
+                            desc: "OpenAI Codex（推理分档）".to_string(),
+                            completion: format!("/connect {provider_cmd} api {key} {model}"),
+                        });
+                    }
+                }
+            }
             return items;
         }
         "api-general" | "api-coding" | "general" | "coding" | "coding-plan" => {
@@ -788,6 +830,15 @@ pub fn model_hint_items(paths: &AgentPaths, rest: &str) -> Vec<HintItem> {
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::OpenAIApi)
+    {
+        for codex_tier in OPENAI_CODEX_TIER_MODELS {
+            if !models.iter().any(|m| m == codex_tier) {
+                models.push(codex_tier.to_string());
+            }
+        }
+    }
     if !models.iter().any(|m| m == &current) {
         models.insert(0, current.clone());
     }
@@ -1258,16 +1309,131 @@ fn parse_zhipu_api_type_for_cli(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum OpenAiReasoningEffort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+}
+
+impl OpenAiReasoningEffort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+}
+
+fn resolve_openai_compatible_model(
+    provider: &ConnectProvider,
+    configured_model: &str,
+) -> (String, Option<OpenAiReasoningEffort>) {
+    if !matches!(provider, ConnectProvider::OpenAi) {
+        return (configured_model.to_string(), None);
+    }
+    if let Some((model, effort)) = parse_openai_model_and_effort(configured_model) {
+        return (model, Some(effort));
+    }
+    let model = configured_model.trim().to_ascii_lowercase();
+    if matches!(
+        model.as_str(),
+        "gpt-5-codex" | "gpt5-codex" | "gpt5.2-codex"
+    ) {
+        return (OPENAI_CODEX_BASE_MODEL.to_string(), None);
+    }
+    (configured_model.to_string(), None)
+}
+
+fn parse_openai_model_and_effort(model: &str) -> Option<(String, OpenAiReasoningEffort)> {
+    let normalized = model.trim().to_ascii_lowercase().replace('_', "-");
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let parts = normalized.split_whitespace().collect::<Vec<_>>();
+    if parts.len() == 2
+        && is_openai_codex_model(parts[0])
+        && let Some(effort) = parse_reasoning_effort(parts[1])
+    {
+        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), effort));
+    }
+
+    if let Some((base, effort)) = normalized.rsplit_once('@')
+        && is_openai_codex_model(base)
+        && let Some(parsed_effort) = parse_reasoning_effort(effort)
+    {
+        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+    }
+
+    if let Some((base, effort)) = normalized.rsplit_once(':')
+        && is_openai_codex_model(base)
+        && let Some(parsed_effort) = parse_reasoning_effort(effort)
+    {
+        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+    }
+
+    if let Some((base, effort)) = normalized.rsplit_once('/')
+        && is_openai_codex_model(base)
+        && let Some(parsed_effort) = parse_reasoning_effort(effort)
+    {
+        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+    }
+
+    for prefix in [
+        "gpt-5.2-codex-",
+        "gpt-5-codex-",
+        "gpt5.2-codex-",
+        "gpt5-codex-",
+    ] {
+        if let Some(raw_effort) = normalized.strip_prefix(prefix)
+            && let Some(parsed_effort) = parse_reasoning_effort(raw_effort)
+        {
+            return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+        }
+    }
+
+    None
+}
+
+fn is_openai_codex_model(model: &str) -> bool {
+    matches!(
+        model.trim(),
+        "gpt-5.2-codex" | "gpt-5-codex" | "gpt5.2-codex" | "gpt5-codex"
+    )
+}
+
+fn parse_reasoning_effort(raw: &str) -> Option<OpenAiReasoningEffort> {
+    match raw.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "low" => Some(OpenAiReasoningEffort::Low),
+        "medium" | "med" => Some(OpenAiReasoningEffort::Medium),
+        "high" => Some(OpenAiReasoningEffort::High),
+        "xhigh" | "x-high" => Some(OpenAiReasoningEffort::Xhigh),
+        _ => None,
+    }
+}
+
+fn codex_cli_model_name(model: &str) -> String {
+    resolve_openai_compatible_model(&ConnectProvider::OpenAi, model).0
+}
+
 async fn chat_via_openai_compatible_api(
     http: &reqwest::Client,
     endpoint: &str,
     model: &str,
     messages: &[ChatMessage],
+    reasoning_effort: Option<OpenAiReasoningEffort>,
 ) -> Result<ChatApiOutput> {
     let body = ChatCompletionRequest {
         model: model.to_string(),
         messages: messages.to_vec(),
         temperature: 0.2,
+        reasoning: reasoning_effort.map(|effort| ChatReasoning {
+            effort: effort.as_str().to_string(),
+        }),
     };
 
     let response = http
@@ -1276,17 +1442,42 @@ async fn chat_via_openai_compatible_api(
         .send()
         .await
         .with_context(|| format!("Failed to call API: {endpoint}"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        bail!("API error {status}: {text}");
+    let status = response.status();
+    let body_text = response.text().await.unwrap_or_default();
+    let mut parsed = if status.is_success() {
+        serde_json::from_str::<ChatCompletionResponse>(&body_text).with_context(|| {
+            format!("Failed to parse OpenAI chat completion response: {body_text}")
+        })
+    } else {
+        bail!("API error {status}: {body_text}");
+    };
+    if parsed.is_err() && reasoning_effort.is_some() {
+        let lower = body_text.to_ascii_lowercase();
+        if lower.contains("reasoning") || lower.contains("effort") {
+            let fallback_body = ChatCompletionRequest {
+                model: model.to_string(),
+                messages: messages.to_vec(),
+                temperature: 0.2,
+                reasoning: None,
+            };
+            let fallback_response = http
+                .post(endpoint)
+                .json(&fallback_body)
+                .send()
+                .await
+                .with_context(|| format!("Failed to call API: {endpoint}"))?;
+            let status = fallback_response.status();
+            let fallback_text = fallback_response.text().await.unwrap_or_default();
+            parsed = if status.is_success() {
+                serde_json::from_str::<ChatCompletionResponse>(&fallback_text).with_context(|| {
+                    format!("Failed to parse OpenAI chat completion response: {fallback_text}")
+                })
+            } else {
+                bail!("API error {status}: {fallback_text}");
+            };
+        }
     }
-
-    let parsed: ChatCompletionResponse = response
-        .json()
-        .await
-        .context("Failed to parse OpenAI chat completion response")?;
+    let parsed = parsed?;
 
     let content = parsed
         .choices
@@ -1431,7 +1622,7 @@ async fn chat_via_codex_exec(messages: &[ChatMessage], model: Option<String>) ->
         .arg(&output_file);
 
     if let Some(model) = model {
-        cmd.arg("--model").arg(model);
+        cmd.arg("--model").arg(codex_cli_model_name(&model));
     }
     cmd.arg(prompt);
 
@@ -1484,6 +1675,13 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ChatReasoning>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatReasoning {
+    effort: String,
 }
 
 #[derive(Debug, Deserialize)]

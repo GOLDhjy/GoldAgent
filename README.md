@@ -53,9 +53,10 @@ cargo run
 
 # 连接后端
 cargo run -- connect status
-cargo run -- connect login --model gpt-5
-cargo run -- connect api sk-xxxx --model gpt-4.1-mini
-cargo run -- connect api sk-ant-xxxx --provider anthropic --model claude-3-7-sonnet-latest
+cargo run -- connect login --model gpt-5.2
+cargo run -- connect api sk-xxxx --model gpt-5.2
+cargo run -- connect api sk-xxxx --model gpt-5.2-codex@high
+cargo run -- connect api sk-ant-xxxx --provider anthropic --model claude-sonnet-4-5
 cargo run -- connect api sk-xxxx --provider zhipu --zhipu-api-type general --model glm-5
 cargo run -- connect api sk-xxxx --provider zhipu --zhipu-api-type coding --model glm-5
 # 推荐在对话里走统一流程：/connect zhipu -> 选择 api-general / api-coding
@@ -79,6 +80,7 @@ cargo run -- skill run daily-summary "今天做了三件事：..."
 - `/` 或 `/help`：显示命令面板
 - `/model`：查看模型状态
 - `/model <model>`：切换模型（`/model` 后可上下选择候选模型）
+- OpenAI Codex 四档：`/model gpt-5.2-codex@low|medium|high|xhigh`
 - `/connect`：进入连接设置
 - `/connect status`：查看连接状态（厂商/模式/模型/账户/用量）
 - `/connect openai`：进入 OpenAI 连接方式（`login` / `api`）
