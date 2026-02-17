@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::process::Command;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectProvider {
     #[default]
@@ -81,12 +81,13 @@ pub fn set_provider_api(
 ) -> Result<ConnectConfig> {
     validate_api_key(&provider, &api_key)?;
     let mut cfg = load(paths).unwrap_or_default();
+    let provider_changed = cfg.provider != provider;
     cfg.provider = provider.clone();
     cfg.mode = ConnectMode::OpenAIApi;
     cfg.api_key = Some(api_key);
-    if model.is_some() {
-        cfg.model = model;
-    } else if cfg.model.is_none() {
+    if let Some(model) = model {
+        cfg.model = Some(normalize_model_for_provider(&provider, &model));
+    } else if provider_changed || cfg.model.is_none() {
         cfg.model = Some(default_model_for_provider(&provider).to_string());
     }
     save(paths, &cfg)?;
@@ -95,7 +96,7 @@ pub fn set_provider_api(
 
 pub fn set_model(paths: &AgentPaths, model: Option<String>) -> Result<ConnectConfig> {
     let mut cfg = load(paths).unwrap_or_default();
-    cfg.model = model;
+    cfg.model = model.map(|m| normalize_model_for_provider(&cfg.provider, &m));
     save(paths, &cfg)?;
     Ok(cfg)
 }
@@ -104,7 +105,28 @@ pub fn default_model_for_provider(provider: &ConnectProvider) -> &'static str {
     match provider {
         ConnectProvider::OpenAi => "gpt-4.1-mini",
         ConnectProvider::Anthropic => "claude-3-5-sonnet-latest",
-        ConnectProvider::Zhipu => "glm-4-flash",
+        ConnectProvider::Zhipu => "glm-5",
+    }
+}
+
+pub fn normalize_model_for_provider(provider: &ConnectProvider, model: &str) -> String {
+    let trimmed = model.trim();
+    if trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+
+    match provider {
+        ConnectProvider::Zhipu => {
+            let lower = trimmed.to_ascii_lowercase();
+            match lower.as_str() {
+                "glm-5.0" | "glm5" | "glm5.0" => "glm-5".to_string(),
+                "glm4.7" => "glm-4.7".to_string(),
+                "glm4.7-flash" => "glm-4.7-flash".to_string(),
+                "glm4.7-flashx" => "glm-4.7-flashx".to_string(),
+                _ => trimmed.to_string(),
+            }
+        }
+        ConnectProvider::OpenAi | ConnectProvider::Anthropic => trimmed.to_string(),
     }
 }
 

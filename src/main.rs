@@ -58,12 +58,8 @@ async fn main() -> Result<()> {
 
 async fn run_task(paths: &AgentPaths, task: &str, model: Option<String>) -> Result<()> {
     let client = OpenAIClient::from_paths(paths, model)?;
-    let memory_context = memory::tail_context(paths, 4_000)?;
     let _ = memory::capture_explicit_remember(paths, "run.task", task)?;
-
-    let system = format!(
-        "You are GoldAgent, a local assistant.\nUse memory carefully and answer concisely.\n\nMemory context:\n{memory_context}"
-    );
+    let system = build_system_prompt(paths, &client, true)?;
 
     let response = client
         .chat(&[ChatMessage::system(system), ChatMessage::user(task)])
@@ -81,11 +77,9 @@ async fn run_task(paths: &AgentPaths, task: &str, model: Option<String>) -> Resu
 
 async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
     let mut client = OpenAIClient::from_paths(paths, model)?;
-    let memory_context = memory::tail_context(paths, 4_000)?;
-
-    let mut messages = vec![ChatMessage::system(format!(
-        "You are GoldAgent, a local assistant.\nMemory context:\n{memory_context}"
-    ))];
+    let mut messages = vec![ChatMessage::system(build_system_prompt(
+        paths, &client, false,
+    )?)];
 
     print_chat_header(&client);
     print_chat_commands_hint();
@@ -132,9 +126,7 @@ async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
 
 fn print_chat_header(client: &OpenAIClient) {
     println!();
-    println!("+----------------------------------------------+");
-    println!("|                GoldAgent Chat                |");
-    println!("+----------------------------------------------+");
+    println!("GoldAgent Chat");
     println!("后端: {}", client.backend_label());
 }
 
@@ -145,11 +137,49 @@ fn print_chat_commands_hint() {
 }
 
 fn print_assistant_block(response: &str) {
-    println!("+ goldagent");
-    for line in response.lines() {
-        println!("| {line}");
+    let mut lines = response.lines();
+    match lines.next() {
+        Some(first) => {
+            println!("goldagent: {first}");
+            for line in lines {
+                println!("           {line}");
+            }
+        }
+        None => {
+            println!("goldagent:");
+        }
     }
-    println!("+----------------------------------------------");
+}
+
+fn build_system_prompt(paths: &AgentPaths, client: &OpenAIClient, concise: bool) -> Result<String> {
+    let memory_context = memory::tail_context(paths, 4_000)?;
+    let mut prompt = String::from("You are GoldAgent, a local assistant.\n");
+    if concise {
+        prompt.push_str("Use memory carefully and answer concisely.\n");
+    }
+    prompt.push_str(&format!(
+        "Current backend: {}.\n\
+If asked about model/backend identity, answer strictly based on Current backend, not historical memory.\n\
+Never claim a fixed model family unless it matches Current backend.\n\n\
+Memory context:\n{}",
+        client.backend_label(),
+        memory_context
+    ));
+    Ok(prompt)
+}
+
+fn refresh_chat_system_prompt(
+    paths: &AgentPaths,
+    client: &OpenAIClient,
+    messages: &mut Vec<ChatMessage>,
+) -> Result<()> {
+    let system = ChatMessage::system(build_system_prompt(paths, client, false)?);
+    if messages.is_empty() {
+        messages.push(system);
+    } else {
+        messages[0] = system;
+    }
+    Ok(())
 }
 
 enum SlashAction {
@@ -190,6 +220,7 @@ async fn handle_chat_slash(
 
     if let Some(rest) = input.strip_prefix("/connect ") {
         if handle_connect_chat_command(paths, client, rest)? {
+            refresh_chat_system_prompt(paths, client, messages)?;
             return Ok(SlashAction::Continue);
         }
     }
@@ -209,6 +240,7 @@ async fn handle_chat_slash(
         }
         connect::set_model(paths, Some(model.to_string()))?;
         *client = OpenAIClient::from_paths(paths, None)?;
+        refresh_chat_system_prompt(paths, client, messages)?;
         println!("已切换模型：{}", client.backend_label());
         return Ok(SlashAction::Continue);
     }
@@ -232,11 +264,13 @@ async fn handle_chat_slash(
             }
             connect::set_model(paths, Some(target.to_string()))?;
             *client = OpenAIClient::from_paths(paths, None)?;
+            refresh_chat_system_prompt(paths, client, messages)?;
             println!("已切换模型：{}", client.backend_label());
             return Ok(SlashAction::Continue);
         }
         connect::set_model(paths, Some(model.to_string()))?;
         *client = OpenAIClient::from_paths(paths, None)?;
+        refresh_chat_system_prompt(paths, client, messages)?;
         println!("已切换模型：{}", client.backend_label());
         return Ok(SlashAction::Continue);
     }
@@ -543,7 +577,15 @@ fn suggested_models(provider: &connect::ConnectProvider) -> Vec<&'static str> {
         connect::ConnectProvider::Anthropic => {
             vec!["claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest"]
         }
-        connect::ConnectProvider::Zhipu => vec!["glm-4-plus", "glm-4-air", "glm-4-flash"],
+        connect::ConnectProvider::Zhipu => vec![
+            "glm-5",
+            "glm-4.7",
+            "glm-4.7-flash",
+            "glm-4.7-flashx",
+            "glm-4.6",
+            "glm-4.5-airx",
+            "glm-4.5-flash",
+        ],
     }
 }
 

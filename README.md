@@ -56,7 +56,7 @@ cargo run -- connect status
 cargo run -- connect login --model gpt-5
 cargo run -- connect api sk-xxxx --model gpt-4.1-mini
 cargo run -- connect api sk-ant-xxxx --provider anthropic --model claude-3-7-sonnet-latest
-cargo run -- connect api sk-xxxx --provider zhipu --model glm-4-flash
+cargo run -- connect api sk-xxxx --provider zhipu --model glm-5
 # 推荐在对话里走统一流程：/connect <provider> -> 选择 api/login
 
 # Cron

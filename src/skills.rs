@@ -108,7 +108,12 @@ pub async fn run_skill(
     let memory_context = memory::tail_context(paths, 3_000)?;
 
     let system = format!(
-        "You are GoldAgent.\n\nSkill definition:\n{skill_content}\n\nMemory context:\n{memory_context}\n\nFollow the skill faithfully and produce a concise response."
+        "You are GoldAgent.\n\
+Current backend: {}.\n\
+If asked about model/backend identity, answer strictly based on Current backend, not historical memory.\n\n\
+Skill definition:\n{skill_content}\n\nMemory context:\n{memory_context}\n\n\
+Follow the skill faithfully and produce a concise response.",
+        client.backend_label()
     );
 
     let messages = vec![ChatMessage::system(system), ChatMessage::user(input)];

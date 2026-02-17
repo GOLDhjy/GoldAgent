@@ -38,7 +38,10 @@ pub fn tail_context(paths: &AgentPaths, max_chars: usize) -> Result<String> {
     let global = fs::read_to_string(&paths.memory_file).unwrap_or_default();
     let mut merged = String::new();
     merged.push_str("## Long-Term Memory (tail)\n");
-    merged.push_str(&take_tail_chars(&global, max_chars / 2));
+    merged.push_str(&take_tail_chars(
+        &strip_assistant_sections(&global),
+        max_chars / 2,
+    ));
     merged.push_str("\n\n## Recent Short-Term Memory\n");
 
     let mut short_term_files = list_short_term_files(&paths.memory_dir)?;
@@ -47,7 +50,10 @@ pub fn tail_context(paths: &AgentPaths, max_chars: usize) -> Result<String> {
 
     for file in short_term_files.into_iter().take(7) {
         let content = fs::read_to_string(file).unwrap_or_default();
-        merged.push_str(&take_tail_chars(&content, max_chars / 8));
+        merged.push_str(&take_tail_chars(
+            &strip_assistant_sections(&content),
+            max_chars / 8,
+        ));
         merged.push('\n');
     }
 
@@ -414,6 +420,40 @@ fn take_tail_chars(input: &str, max_chars: usize) -> String {
         .into_iter()
         .rev()
         .collect::<String>()
+}
+
+fn strip_assistant_sections(input: &str) -> String {
+    let mut out = String::new();
+    let mut skipping_assistant = false;
+
+    for line in input.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.eq_ignore_ascii_case("assistant:") {
+            skipping_assistant = true;
+            continue;
+        }
+
+        if trimmed.starts_with("## ")
+            || trimmed.starts_with("source:")
+            || trimmed.eq_ignore_ascii_case("content:")
+            || trimmed.eq_ignore_ascii_case("user:")
+        {
+            skipping_assistant = false;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        if skipping_assistant {
+            continue;
+        }
+
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out
 }
 
 #[cfg(test)]

@@ -10,6 +10,10 @@ use std::path::PathBuf;
 use tokio::process::Command;
 use uuid::Uuid;
 
+const ZHIPU_GENERAL_CHAT_ENDPOINT: &str = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
+const ZHIPU_CODING_CHAT_ENDPOINT: &str =
+    "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -141,9 +145,10 @@ impl OpenAIClient {
                     ConnectProvider::Anthropic => {
                         chat_via_anthropic_api(http, endpoint, model, messages).await?
                     }
-                    ConnectProvider::OpenAi | ConnectProvider::Zhipu => {
+                    ConnectProvider::OpenAi => {
                         chat_via_openai_compatible_api(http, endpoint, model, messages).await?
                     }
+                    ConnectProvider::Zhipu => chat_via_zhipu_api(http, model, messages).await?,
                 };
                 self.record_usage(UsageEvent {
                     model_key: format!("{}:{model}", provider_key(provider)),
@@ -299,6 +304,41 @@ async fn chat_via_openai_compatible_api(
     })
 }
 
+async fn chat_via_zhipu_api(
+    http: &reqwest::Client,
+    model: &str,
+    messages: &[ChatMessage],
+) -> Result<ChatApiOutput> {
+    match chat_via_openai_compatible_api(http, ZHIPU_CODING_CHAT_ENDPOINT, model, messages).await {
+        Ok(output) => Ok(output),
+        Err(coding_err) => {
+            let coding_text = coding_err.to_string();
+            if !looks_like_zhipu_quota_1113(&coding_text) {
+                return Err(coding_err);
+            }
+
+            match chat_via_openai_compatible_api(http, ZHIPU_GENERAL_CHAT_ENDPOINT, model, messages)
+                .await
+            {
+                Ok(output) => Ok(output),
+                Err(general_err) => {
+                    bail!(
+                        "智谱 API 调用失败：Coding 端点返回 1113（余额不足或资源包不可用），已自动尝试通用端点但仍失败。\nCoding 端点: {coding_text}\n通用端点: {}",
+                        general_err
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn looks_like_zhipu_quota_1113(err: &str) -> bool {
+    err.contains("\"code\":\"1113\"")
+        || err.contains("\"code\":1113")
+        || (err.contains("1113") && err.contains("余额不足"))
+        || (err.contains("1113") && err.contains("资源包"))
+}
+
 async fn chat_via_anthropic_api(
     http: &reqwest::Client,
     endpoint: &str,
@@ -393,9 +433,7 @@ fn provider_key(provider: &ConnectProvider) -> &'static str {
 fn api_endpoint_for_provider(provider: &ConnectProvider) -> Result<String> {
     match provider {
         ConnectProvider::OpenAi => Ok("https://api.openai.com/v1/chat/completions".to_string()),
-        ConnectProvider::Zhipu => {
-            Ok("https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string())
-        }
+        ConnectProvider::Zhipu => Ok(ZHIPU_CODING_CHAT_ENDPOINT.to_string()),
         ConnectProvider::Anthropic => Ok("https://api.anthropic.com/v1/messages".to_string()),
     }
 }
