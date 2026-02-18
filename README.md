@@ -2,7 +2,35 @@
 
 GoldAgent 是一个使用 Rust 构建的本地 CLI 助手。
 
-当前 MVP 已支持：
+## Homebrew 安装（Formula）
+
+本仓库已提供 Formula 文件：`Formula/goldagent.rb`
+并且发布后会自动更新（workflow：`.github/workflows/update-formula.yml`）。
+
+Homebrew 5 开始，安装第三方 Formula 需要先 `tap` 仓库。
+
+安装：
+
+```bash
+brew tap GOLDhjy/goldagent https://github.com/GOLDhjy/GoldAgent
+brew install GOLDhjy/goldagent/goldagent
+```
+
+更新：
+
+```bash
+brew update
+brew upgrade GOLDhjy/goldagent/goldagent
+```
+
+卸载：
+
+```bash
+brew uninstall GOLDhjy/goldagent/goldagent
+```
+
+
+## 当前 MVP 已支持：
 
 - 默认循环对话：直接执行 `goldagent`（开发阶段可用 `cargo run`）
 - 显式对话命令：`goldagent chat`
@@ -73,32 +101,6 @@ mv goldagent-v0.1.0-macos-aarch64/goldagent /usr/local/bin/
 goldagent --help
 ```
 
-## Homebrew 安装（Formula）
-
-本仓库已提供 Formula 文件：`Formula/goldagent.rb`
-并且发布后会自动更新（workflow：`.github/workflows/update-formula.yml`）。
-
-Homebrew 5 开始，安装第三方 Formula 需要先 `tap` 仓库。
-
-安装：
-
-```bash
-brew tap GOLDhjy/goldagent https://github.com/GOLDhjy/GoldAgent
-brew install GOLDhjy/goldagent/goldagent
-```
-
-更新：
-
-```bash
-brew update
-brew upgrade GOLDhjy/goldagent/goldagent
-```
-
-卸载：
-
-```bash
-brew uninstall GOLDhjy/goldagent/goldagent
-```
 
 ## 常用命令
 
