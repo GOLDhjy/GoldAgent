@@ -10,6 +10,7 @@ const LONG_TERM_MEMORY_TITLE: &str = "# GoldAgent 长期记忆";
 const LONG_TERM_MEMORY_HEADER: &str =
     "# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n";
 const CAPABILITY_DECLARATION_TITLE: &str = "## GoldAgent 能力声明";
+const CONNECT_MEMORY_RULES_TITLE: &str = "## GoldAgent 连接与记忆规则";
 
 pub fn append_global(paths: &AgentPaths, content: &str, tags: &[String]) -> Result<String> {
     let ts = Utc::now();
@@ -42,15 +43,20 @@ content:\n\
 pub fn ensure_capability_declarations(paths: &AgentPaths) -> Result<()> {
     let existing = fs::read_to_string(&paths.memory_file).unwrap_or_default();
     let declaration = render_capability_declaration(paths);
-    let body_without_declaration = strip_capability_declaration_block(&existing);
+    let connect_memory_rules = render_connect_memory_rules(paths);
+    let body_without_declaration =
+        strip_named_section_block(&existing, CAPABILITY_DECLARATION_TITLE);
+    let body_without_managed_sections =
+        strip_named_section_block(&body_without_declaration, CONNECT_MEMORY_RULES_TITLE);
     let (header_block, body_without_header) =
-        extract_memory_header_block(&body_without_declaration);
+        extract_memory_header_block(&body_without_managed_sections);
     let body = body_without_header.trim_start_matches('\n');
 
     let mut next_content = String::new();
     next_content.push_str(header_block.trim_end());
     next_content.push_str("\n\n");
     next_content.push_str(&declaration);
+    next_content.push_str(&connect_memory_rules);
     if !body.is_empty() {
         next_content.push_str(body);
     }
@@ -99,7 +105,7 @@ fn extract_memory_header_block(input: &str) -> (String, String) {
     (header, body)
 }
 
-fn strip_capability_declaration_block(input: &str) -> String {
+fn strip_named_section_block(input: &str, section_title: &str) -> String {
     let lines = input.lines().collect::<Vec<_>>();
     if lines.is_empty() {
         return String::new();
@@ -109,11 +115,11 @@ fn strip_capability_declaration_block(input: &str) -> String {
     let mut idx = 0usize;
 
     while idx < lines.len() {
-        if lines[idx].trim() == CAPABILITY_DECLARATION_TITLE {
+        if lines[idx].trim() == section_title {
             idx += 1;
             while idx < lines.len() {
                 let line = lines[idx];
-                if line.starts_with('#') {
+                if line.starts_with("# ") || line.starts_with("## ") {
                     break;
                 }
                 idx += 1;
@@ -142,20 +148,54 @@ fn strip_capability_declaration_block(input: &str) -> String {
 fn render_capability_declaration(paths: &AgentPaths) -> String {
     format!(
         "{CAPABILITY_DECLARATION_TITLE}\n\
-系统能力：\n\
-1. 定时任务持久化文件：{jobs_file}\n\
-2. Hook 任务持久化文件：{hooks_file}\n\
-3. 创建定时任务时，使用 `goldagent cron add ...`，该命令会写入 jobs.json\n\
-4. 创建 hook 时，使用 `goldagent hook add-git ...` 或 `goldagent hook add-p4 ...`，该命令会写入 hooks.json\n\
-5. 任务命令模板：goldagent run \"<task>\"\n\
-6. Cron schedule 支持：daily@HH:MM、weekdays@HH:MM、5/6 段 cron 表达式\n\
-7. 推荐创建 cron 命令：goldagent cron add \"<schedule>\" \"goldagent run \\\"<task>\\\"\"\n\
-8. 推荐创建 Git hook 命令：goldagent hook add-git <repo_path> \"goldagent run \\\"<task>\\\"\" --ref <branch_or_ref> --interval <seconds>\n\
-9. 推荐创建 P4 hook 命令：goldagent hook add-p4 <depot_path> \"goldagent run \\\"<task>\\\"\" --interval <seconds>\n\
-10. Hook 命令支持变量：${{HOOK_ID}}、${{HOOK_NAME}}、${{HOOK_SOURCE}}、${{HOOK_TARGET}}、${{HOOK_REF}}、${{HOOK_PREVIOUS}}、${{HOOK_CURRENT}}\n\
+### Cron 定时任务\n\
+- 持久化文件：`{jobs_file}`\n\
+- 创建方式：`goldagent cron add \"<schedule>\" \"goldagent run \\\"<task>\\\"\"`\n\
+- 常用 schedule：`daily@HH:MM`、`weekdays@HH:MM`、5/6 段 cron 表达式\n\
+- 管理命令：`goldagent cron list`、`goldagent cron remove <job_id>`\n\
+\n\
+### Hook 事件触发\n\
+- 持久化文件：`{hooks_file}`\n\
+- Git hook 创建：`goldagent hook add-git <repo_path> \"goldagent run \\\"<task>\\\"\" --ref <branch_or_ref> --interval <seconds>`\n\
+- P4 hook 创建：`goldagent hook add-p4 <depot_path> \"goldagent run \\\"<task>\\\"\" --interval <seconds>`\n\
+- Hook 模板变量：`${{HOOK_ID}}`、`${{HOOK_NAME}}`、`${{HOOK_SOURCE}}`、`${{HOOK_TARGET}}`、`${{HOOK_REF}}`、`${{HOOK_PREVIOUS}}`、`${{HOOK_CURRENT}}`\n\
+- 管理命令：`goldagent hook list`、`goldagent hook remove <hook_id>`\n\
+\n\
+### Skill 技能\n\
+- 存储目录：`{skills_dir}`\n\
+- 创建模板：`goldagent skill new <skill_name>`（生成 `<skill_name>/SKILL.md`）\n\
+- 运行方式：`goldagent skill run <skill_name> \"<input>\"`\n\
+- 列表命令：`goldagent skill list`\n\
+\n\
+### 会话与执行\n\
+- 单轮任务：`goldagent run \"<task>\"`\n\
+- 交互会话：`goldagent` 或 `goldagent chat`\n\
+- 调度服务：`goldagent serve`（同时运行 cron 与 hook watcher）\n\
 \n",
         jobs_file = paths.jobs_file.display(),
-        hooks_file = paths.hooks_file.display()
+        hooks_file = paths.hooks_file.display(),
+        skills_dir = paths.skills_dir.display()
+    )
+}
+
+fn render_connect_memory_rules(paths: &AgentPaths) -> String {
+    format!(
+        "{CONNECT_MEMORY_RULES_TITLE}\n\
+### 模型连接\n\
+- 配置文件：`{connect_file}`\n\
+- 状态查询：`goldagent connect status`\n\
+- 登录态：`goldagent connect login --model <model>`\n\
+- API 模式：`goldagent connect api <api_key> --provider <openai|anthropic|zhipu> --model <model>`\n\
+\n\
+### 记忆机制\n\
+- 长期记忆文件：`{memory_file}`\n\
+- 短期记忆目录：`{memory_dir}`（按天写入 `YYYY-MM-DD.md`）\n\
+- 自动晋升规则：关键词命中、显式“记住”、或同句在短期记忆重复出现 >= 3 次\n\
+- 去重规则：规范化后文本重复则不重复写入长期记忆\n\
+\n",
+        connect_file = paths.connect_file.display(),
+        memory_file = paths.memory_file.display(),
+        memory_dir = paths.memory_dir.display()
     )
 }
 
@@ -693,22 +733,38 @@ mod tests {
         ensure_capability_declarations(&paths).unwrap();
 
         let memory = fs::read_to_string(&paths.memory_file).unwrap();
-        let title_count = memory
+        let capability_title_count = memory
             .matches("## GoldAgent 能力声明")
             .collect::<Vec<_>>()
             .len();
-        assert_eq!(title_count, 1);
+        assert_eq!(capability_title_count, 1);
+        let rules_title_count = memory
+            .matches("## GoldAgent 连接与记忆规则")
+            .collect::<Vec<_>>()
+            .len();
+        assert_eq!(rules_title_count, 1);
         assert_eq!(
             memory.lines().next().unwrap_or_default(),
             "# GoldAgent 长期记忆"
         );
         let header_pos = memory.find("# GoldAgent 长期记忆").unwrap_or(usize::MAX);
         let declaration_pos = memory.find("## GoldAgent 能力声明").unwrap_or(0);
+        let rules_pos = memory.find("## GoldAgent 连接与记忆规则").unwrap_or(0);
         assert!(header_pos < declaration_pos);
+        assert!(declaration_pos < rules_pos);
+        let capability_block = &memory[declaration_pos..rules_pos];
+        assert!(memory.contains("### Cron 定时任务"));
+        assert!(memory.contains("### Hook 事件触发"));
+        assert!(memory.contains("### Skill 技能"));
+        assert!(memory.contains("### 模型连接"));
+        assert!(memory.contains("### 记忆机制"));
+        assert!(!capability_block.contains("### 模型连接"));
+        assert!(!capability_block.contains("### 记忆机制"));
         assert!(memory.contains(&paths.jobs_file.display().to_string()));
         assert!(memory.contains(&paths.hooks_file.display().to_string()));
         assert!(memory.contains("goldagent hook add-git"));
         assert!(memory.contains("goldagent hook add-p4"));
+        assert!(memory.contains("goldagent skill new <skill_name>"));
         assert!(memory.contains("# GoldAgent 长期记忆"));
 
         let _ = fs::remove_dir_all(paths.root);
@@ -731,9 +787,12 @@ mod tests {
             "# GoldAgent 长期记忆"
         );
         assert_eq!(memory.matches("## GoldAgent 能力声明").count(), 1);
+        assert_eq!(memory.matches("## GoldAgent 连接与记忆规则").count(), 1);
         let header_pos = memory.find("# GoldAgent 长期记忆").unwrap_or(usize::MAX);
         let declaration_pos = memory.find("## GoldAgent 能力声明").unwrap_or(0);
+        let rules_pos = memory.find("## GoldAgent 连接与记忆规则").unwrap_or(0);
         assert!(header_pos < declaration_pos);
+        assert!(declaration_pos < rules_pos);
 
         let _ = fs::remove_dir_all(paths.root);
     }
