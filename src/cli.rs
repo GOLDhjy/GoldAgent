@@ -40,6 +40,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: CronCommand,
     },
+    /// Hook 事件触发任务命令
+    Hook {
+        #[command(subcommand)]
+        command: HookCommand,
+    },
     /// Skill 技能命令
     Skill {
         #[command(subcommand)]
@@ -61,6 +66,38 @@ pub enum CronCommand {
     /// 列出所有 cron 任务
     List,
     /// 删除一条 cron 任务
+    Remove { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HookCommand {
+    /// 新增 Git 提交轮询触发任务
+    AddGit {
+        repo: String,
+        command: String,
+        #[arg(long = "ref")]
+        reference: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        retry_max: u8,
+    },
+    /// 新增 P4 提交轮询触发任务
+    AddP4 {
+        depot: String,
+        command: String,
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value_t = 1)]
+        retry_max: u8,
+    },
+    /// 列出所有 hook 任务
+    List,
+    /// 删除一条 hook 任务
     Remove { id: String },
 }
 

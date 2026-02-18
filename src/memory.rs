@@ -6,6 +6,11 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
+const LONG_TERM_MEMORY_TITLE: &str = "# GoldAgent 长期记忆";
+const LONG_TERM_MEMORY_HEADER: &str =
+    "# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n";
+const CAPABILITY_DECLARATION_TITLE: &str = "## GoldAgent 能力声明";
+
 pub fn append_global(paths: &AgentPaths, content: &str, tags: &[String]) -> Result<String> {
     let ts = Utc::now();
     let id = format!("mem_{}", ts.format("%Y%m%d%H%M%S"));
@@ -32,6 +37,126 @@ content:\n\
         .open(&paths.memory_file)?;
     file.write_all(entry.as_bytes())?;
     Ok(id)
+}
+
+pub fn ensure_capability_declarations(paths: &AgentPaths) -> Result<()> {
+    let existing = fs::read_to_string(&paths.memory_file).unwrap_or_default();
+    let declaration = render_capability_declaration(paths);
+    let body_without_declaration = strip_capability_declaration_block(&existing);
+    let (header_block, body_without_header) =
+        extract_memory_header_block(&body_without_declaration);
+    let body = body_without_header.trim_start_matches('\n');
+
+    let mut next_content = String::new();
+    next_content.push_str(header_block.trim_end());
+    next_content.push_str("\n\n");
+    next_content.push_str(&declaration);
+    if !body.is_empty() {
+        next_content.push_str(body);
+    }
+
+    if next_content != existing {
+        fs::write(&paths.memory_file, next_content)?;
+    }
+    Ok(())
+}
+
+fn extract_memory_header_block(input: &str) -> (String, String) {
+    let lines = input.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return (LONG_TERM_MEMORY_HEADER.to_string(), String::new());
+    }
+
+    let Some(start) = lines
+        .iter()
+        .position(|line| line.trim() == LONG_TERM_MEMORY_TITLE)
+    else {
+        return (LONG_TERM_MEMORY_HEADER.to_string(), input.to_string());
+    };
+
+    let mut end = start + 1;
+    while end < lines.len() {
+        if lines[end].starts_with("## ") {
+            break;
+        }
+        end += 1;
+    }
+
+    let mut header = lines[start..end].join("\n");
+    if header.trim().is_empty() {
+        header = LONG_TERM_MEMORY_HEADER.to_string();
+    }
+
+    let mut remainder_lines = Vec::with_capacity(lines.len().saturating_sub(end - start));
+    remainder_lines.extend_from_slice(&lines[..start]);
+    remainder_lines.extend_from_slice(&lines[end..]);
+
+    let mut body = remainder_lines.join("\n");
+    if input.ends_with('\n') {
+        body.push('\n');
+    }
+
+    (header, body)
+}
+
+fn strip_capability_declaration_block(input: &str) -> String {
+    let lines = input.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut out = Vec::with_capacity(lines.len());
+    let mut idx = 0usize;
+
+    while idx < lines.len() {
+        if lines[idx].trim() == CAPABILITY_DECLARATION_TITLE {
+            idx += 1;
+            while idx < lines.len() {
+                let line = lines[idx];
+                if line.starts_with('#') {
+                    break;
+                }
+                idx += 1;
+            }
+            while idx < lines.len() && lines[idx].trim().is_empty() {
+                idx += 1;
+            }
+            continue;
+        }
+
+        out.push(lines[idx]);
+        idx += 1;
+    }
+
+    if out.is_empty() {
+        return String::new();
+    }
+
+    let mut merged = out.join("\n");
+    if input.ends_with('\n') {
+        merged.push('\n');
+    }
+    merged
+}
+
+fn render_capability_declaration(paths: &AgentPaths) -> String {
+    format!(
+        "{CAPABILITY_DECLARATION_TITLE}\n\
+系统能力：\n\
+1. 定时任务持久化文件：{jobs_file}\n\
+2. Hook 任务持久化文件：{hooks_file}\n\
+3. 创建定时任务时，使用 `goldagent cron add ...`，该命令会写入 jobs.json\n\
+4. 创建 hook 时，使用 `goldagent hook add-git ...` 或 `goldagent hook add-p4 ...`，该命令会写入 hooks.json\n\
+5. 任务命令模板：goldagent run \"<task>\"\n\
+6. Cron schedule 支持：daily@HH:MM、weekdays@HH:MM、5/6 段 cron 表达式\n\
+7. 推荐创建 cron 命令：goldagent cron add \"<schedule>\" \"goldagent run \\\"<task>\\\"\"\n\
+8. 推荐创建 Git hook 命令：goldagent hook add-git <repo_path> \"goldagent run \\\"<task>\\\"\" --ref <branch_or_ref> --interval <seconds>\n\
+9. 推荐创建 P4 hook 命令：goldagent hook add-p4 <depot_path> \"goldagent run \\\"<task>\\\"\" --interval <seconds>\n\
+10. Hook 命令支持变量：${{HOOK_ID}}、${{HOOK_NAME}}、${{HOOK_SOURCE}}、${{HOOK_TARGET}}、${{HOOK_REF}}、${{HOOK_PREVIOUS}}、${{HOOK_CURRENT}}\n\
+\n",
+        jobs_file = paths.jobs_file.display(),
+        hooks_file = paths.hooks_file.display()
+    )
 }
 
 pub fn tail_context(paths: &AgentPaths, max_chars: usize) -> Result<String> {
@@ -104,6 +229,7 @@ pub fn auto_capture_long_term(
         )?;
     }
 
+    // 除关键词外，再做“重复出现 >=3 次”的自动晋升。
     for sentence in split_sentences(user_input) {
         if !is_repeat_candidate(&sentence) {
             continue;
@@ -188,6 +314,7 @@ fn try_capture_candidate(
     tags: Vec<String>,
 ) -> Result<()> {
     let normalized = normalize_for_compare(&candidate);
+    // 过短文本和已存在文本不重复写入长期记忆。
     if normalized.len() < 6 {
         return Ok(());
     }
@@ -226,6 +353,7 @@ fn split_sentences(input: &str) -> Vec<String> {
 }
 
 fn is_important_sentence(sentence: &str) -> bool {
+    // 命中偏好/约束/长期目标关键词的句子，优先进入长期记忆候选。
     let lowered = sentence.to_lowercase();
     let keywords = [
         "我希望",
@@ -255,6 +383,7 @@ fn is_important_sentence(sentence: &str) -> bool {
 }
 
 fn is_repeat_candidate(sentence: &str) -> bool {
+    // 重复统计只针对“有信息量”的句子，过滤寒暄和纯数字。
     let count = sentence.chars().count();
     if !(8..=120).contains(&count) {
         return false;
@@ -268,6 +397,7 @@ fn is_repeat_candidate(sentence: &str) -> bool {
 }
 
 fn is_explicit_remember_sentence(sentence: &str) -> bool {
+    // 用户显式下达“记住”指令时，直接进入长期记忆候选。
     let lowered = sentence.to_lowercase();
     lowered.contains("记住")
         || lowered.contains("请记")
@@ -277,6 +407,7 @@ fn is_explicit_remember_sentence(sentence: &str) -> bool {
 }
 
 fn count_short_term_occurrences(paths: &AgentPaths, sentence: &str) -> Result<usize> {
+    // 在最近 30 份每日短期记忆里累计匹配次数，用于 repeated 晋升。
     let needle = normalize_for_compare(sentence);
     if needle.len() < 6 {
         return Ok(0);
@@ -472,6 +603,7 @@ mod tests {
         fs::create_dir_all(&skills_dir).unwrap();
         let memory_file = root.join("MEMORY.md");
         let jobs_file = root.join("jobs.json");
+        let hooks_file = root.join("hooks.json");
         let connect_file = root.join("connect.json");
         let usage_file = root.join("usage.json");
         fs::write(
@@ -480,6 +612,7 @@ mod tests {
         )
         .unwrap();
         fs::write(&jobs_file, "[]\n").unwrap();
+        fs::write(&hooks_file, "[]\n").unwrap();
         fs::write(
             &connect_file,
             "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null,\n  \"zhipu_api_type\": \"coding\"\n}\n",
@@ -496,6 +629,7 @@ mod tests {
             memory_file,
             memory_dir,
             jobs_file,
+            hooks_file,
             connect_file,
             usage_file,
             logs_dir,
@@ -548,6 +682,58 @@ mod tests {
         let memory = fs::read_to_string(&paths.memory_file).unwrap();
         assert!(memory.contains(sentence));
         assert!(memory.contains("repeated"));
+
+        let _ = fs::remove_dir_all(paths.root);
+    }
+
+    #[test]
+    fn appends_capability_declaration_once() {
+        let paths = make_paths();
+        ensure_capability_declarations(&paths).unwrap();
+        ensure_capability_declarations(&paths).unwrap();
+
+        let memory = fs::read_to_string(&paths.memory_file).unwrap();
+        let title_count = memory
+            .matches("## GoldAgent 能力声明")
+            .collect::<Vec<_>>()
+            .len();
+        assert_eq!(title_count, 1);
+        assert_eq!(
+            memory.lines().next().unwrap_or_default(),
+            "# GoldAgent 长期记忆"
+        );
+        let header_pos = memory.find("# GoldAgent 长期记忆").unwrap_or(usize::MAX);
+        let declaration_pos = memory.find("## GoldAgent 能力声明").unwrap_or(0);
+        assert!(header_pos < declaration_pos);
+        assert!(memory.contains(&paths.jobs_file.display().to_string()));
+        assert!(memory.contains(&paths.hooks_file.display().to_string()));
+        assert!(memory.contains("goldagent hook add-git"));
+        assert!(memory.contains("goldagent hook add-p4"));
+        assert!(memory.contains("# GoldAgent 长期记忆"));
+
+        let _ = fs::remove_dir_all(paths.root);
+    }
+
+    #[test]
+    fn reorders_legacy_content_to_keep_title_first() {
+        let paths = make_paths();
+        fs::write(
+            &paths.memory_file,
+            "## GoldAgent 能力声明\n系统能力：\n1. old\n\n# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n\n",
+        )
+        .unwrap();
+
+        ensure_capability_declarations(&paths).unwrap();
+
+        let memory = fs::read_to_string(&paths.memory_file).unwrap();
+        assert_eq!(
+            memory.lines().next().unwrap_or_default(),
+            "# GoldAgent 长期记忆"
+        );
+        assert_eq!(memory.matches("## GoldAgent 能力声明").count(), 1);
+        let header_pos = memory.find("# GoldAgent 长期记忆").unwrap_or(usize::MAX);
+        let declaration_pos = memory.find("## GoldAgent 能力声明").unwrap_or(0);
+        assert!(header_pos < declaration_pos);
 
         let _ = fs::remove_dir_all(paths.root);
     }

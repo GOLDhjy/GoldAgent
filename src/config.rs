@@ -9,6 +9,7 @@ pub struct AgentPaths {
     pub memory_file: PathBuf,
     pub memory_dir: PathBuf,
     pub jobs_file: PathBuf,
+    pub hooks_file: PathBuf,
     pub connect_file: PathBuf,
     pub usage_file: PathBuf,
     pub logs_dir: PathBuf,
@@ -28,6 +29,7 @@ impl AgentPaths {
             memory_file: root.join("MEMORY.md"),
             memory_dir: root.join("memory"),
             jobs_file: root.join("jobs.json"),
+            hooks_file: root.join("hooks.json"),
             connect_file: root.join("connect.json"),
             usage_file: root.join("usage.json"),
             logs_dir: root.join("logs"),
@@ -47,6 +49,7 @@ impl AgentPaths {
             "# GoldAgent 长期记忆\n\n此文件用于保存长期、可复用的记忆。\n\n",
         )?;
         ensure_file_with(&self.jobs_file, "[]\n")?;
+        ensure_file_with(&self.hooks_file, "[]\n")?;
         ensure_file_with(
             &self.connect_file,
             "{\n  \"provider\": \"openai\",\n  \"mode\": \"codex_login\",\n  \"model\": null,\n  \"api_key\": null,\n  \"zhipu_api_type\": \"coding\"\n}\n",

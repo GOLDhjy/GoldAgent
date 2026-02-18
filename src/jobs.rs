@@ -68,12 +68,22 @@ fn save_jobs(paths: &AgentPaths, jobs: &[Job]) -> Result<()> {
 }
 
 pub fn normalize_schedule(expr: &str) -> Result<String> {
+    let expr = expr.trim();
+    if let Some(time) = expr.strip_prefix("daily@") {
+        let (hour, minute) = parse_hh_mm(time)?;
+        return Ok(format!("0 {minute} {hour} * * *"));
+    }
+    if let Some(time) = expr.strip_prefix("weekdays@") {
+        let (hour, minute) = parse_hh_mm(time)?;
+        return Ok(format!("0 {minute} {hour} * * 1-5"));
+    }
+
     let parts = expr.split_whitespace().collect::<Vec<_>>();
     match parts.len() {
         5 => Ok(format!("0 {expr}")),
         6 => Ok(expr.to_string()),
         _ => bail!(
-            "Invalid cron expression `{expr}`. Expected 5 fields (min hour day month weekday) or 6 fields (sec min hour day month weekday)."
+            "Invalid schedule `{expr}`. Expected: 5-field cron (min hour day month weekday), 6-field cron (sec min hour day month weekday), `daily@HH:MM`, or `weekdays@HH:MM`."
         ),
     }
 }
@@ -82,4 +92,59 @@ pub fn validate_schedule(expr: &str) -> Result<()> {
     let normalized = normalize_schedule(expr)?;
     Schedule::from_str(&normalized).with_context(|| format!("Invalid cron expression: {expr}"))?;
     Ok(())
+}
+
+fn parse_hh_mm(raw: &str) -> Result<(u8, u8)> {
+    let Some((hour_raw, minute_raw)) = raw.split_once(':') else {
+        bail!("Invalid time `{raw}`. Expected HH:MM.");
+    };
+    let hour = hour_raw
+        .parse::<u8>()
+        .with_context(|| format!("Invalid hour in `{raw}`"))?;
+    let minute = minute_raw
+        .parse::<u8>()
+        .with_context(|| format!("Invalid minute in `{raw}`"))?;
+
+    if hour > 23 {
+        bail!("Invalid hour `{hour}`. Expected 00-23.");
+    }
+    if minute > 59 {
+        bail!("Invalid minute `{minute}`. Expected 00-59.");
+    }
+    Ok((hour, minute))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_schedule;
+
+    #[test]
+    fn normalizes_five_field_cron() {
+        let out = normalize_schedule("0 13 * * *").expect("normalize should succeed");
+        assert_eq!(out, "0 0 13 * * *");
+    }
+
+    #[test]
+    fn keeps_six_field_cron() {
+        let out = normalize_schedule("30 0 13 * * *").expect("normalize should succeed");
+        assert_eq!(out, "30 0 13 * * *");
+    }
+
+    #[test]
+    fn supports_daily_shortcut() {
+        let out = normalize_schedule("daily@13:00").expect("normalize should succeed");
+        assert_eq!(out, "0 0 13 * * *");
+    }
+
+    #[test]
+    fn supports_weekdays_shortcut() {
+        let out = normalize_schedule("weekdays@13:00").expect("normalize should succeed");
+        assert_eq!(out, "0 0 13 * * 1-5");
+    }
+
+    #[test]
+    fn rejects_invalid_shortcut_time() {
+        let err = normalize_schedule("daily@25:00").expect_err("normalize should fail");
+        assert!(err.to_string().contains("Invalid hour"));
+    }
 }

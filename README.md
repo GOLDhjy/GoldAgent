@@ -16,6 +16,7 @@ GoldAgent 是一个使用 Rust 构建的本地 CLI 助手。
   - 新建 Skill / 新建 Cron 任务自动写入长期记忆
 - 会话接近历史压缩前会触发一次静默长期记忆提取
 - Cron 任务持久化：`~/.goldagent/jobs.json`
+- Hook 任务持久化：`~/.goldagent/hooks.json`
 - 连接配置持久化：`~/.goldagent/connect.json`
 - Skill 技能加载：`~/.goldagent/skills/*/SKILL.md`
 
@@ -63,8 +64,17 @@ cargo run -- connect api sk-xxxx --provider zhipu --zhipu-api-type coding --mode
 
 # Cron
 cargo run -- cron add "0 9 * * 1-5" "goldagent run \"生成每日计划\""
+cargo run -- cron add "daily@13:00" "goldagent run \"午间复盘\""
 cargo run -- cron list
 cargo run -- cron remove <job_id>
+
+# Hook（事件轮询触发）
+cargo run -- hook add-git /path/to/repo "goldagent run \"分析最新提交\"" --ref main --interval 20
+cargo run -- hook add-p4 //depot/main/... "goldagent run \"分析最新 P4 提交\"" --interval 30
+cargo run -- hook list
+cargo run -- hook remove <hook_id>
+
+# 同时运行 cron + hook watcher
 cargo run -- serve
 
 # Skill
@@ -97,6 +107,7 @@ cargo run -- skill run daily-summary "今天做了三件事：..."
 - 当只输入 `/skill <前缀>` 时，会提示匹配的 skill 名称
 - `/clear`：清屏并重绘窗口
 - `/exit`：退出对话
+- 也可直接用自然语言描述目标，模型会基于 MEMORY 中的规则给出可执行的 cron 创建命令。
 
 命令面板支持键盘操作：
 
@@ -109,6 +120,10 @@ cargo run -- skill run daily-summary "今天做了三件事：..."
   - 示例：`0 9 * * 1-5` 表示工作日 9:00
 - 也支持 6 段（含秒）：
   - `0 */15 * * * *`
+- 支持快捷格式：
+  - `daily@13:00`（每天 13:00）
+  - `weekdays@13:00`（工作日 13:00）
+- Cron 的执行时区为本机本地时区（不是 UTC）
 
 ## 数据目录
 
@@ -123,6 +138,7 @@ GoldAgent 运行数据默认写入：
 - `MEMORY.md`：长期记忆
 - `memory/YYYY-MM-DD.md`：短期过程日志（按天）
 - `jobs.json`：定时任务配置
+- `hooks.json`：事件触发任务配置
 - `connect.json`：连接方式配置（登录态 / API）
 - `usage.json`：本地用量统计（请求数、输入/输出 tokens）
 - `skills/*/SKILL.md`：技能定义文件

@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod connect;
+mod hooks;
 mod jobs;
 mod memory;
 mod provider;
@@ -11,7 +12,7 @@ mod usage;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands, CronCommand, SkillCommand};
+use cli::{Cli, Commands, CronCommand, HookCommand, SkillCommand};
 use config::AgentPaths;
 use provider::{ChatMessage, ProviderClient};
 use std::cmp;
@@ -22,6 +23,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = AgentPaths::new()?;
     paths.ensure()?;
+    memory::ensure_capability_declarations(&paths)?;
 
     let command = cli.command.unwrap_or(Commands::Chat { model: None });
 
@@ -50,6 +52,7 @@ async fn main() -> Result<()> {
         }
         Commands::Connect { command } => provider::handle_connect_command(&paths, command)?,
         Commands::Cron { command } => handle_cron_command(&paths, command)?,
+        Commands::Hook { command } => handle_hook_command(&paths, command)?,
         Commands::Skill { command } => handle_skill_command(&paths, command).await?,
     }
 
@@ -126,13 +129,18 @@ async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
 
 fn print_chat_header(client: &ProviderClient) {
     println!();
-    println!("GoldAgent Chat");
-    println!("后端: {}", client.backend_label());
+    println!("  ____  ___  _     ____    _    ____ _____ _   _ _____ ");
+    println!(" / ___|/ _ \\| |   |  _ \\  / \\  / ___| ____| \\ | |_   _|");
+    println!("| |  _| | | | |   | | | |/ _ \\| |  _|  _| |  \\| | | |  ");
+    println!("| |_| | |_| | |___| |_| / ___ \\ |_| | |___| |\\  | | |  ");
+    println!(" \\____|\\___/|_____|____/_/   \\_\\____|_____|_| \\_| |_|  ");
+    println!();
+    println!("[GoldAgent] Chat session started");
+    println!("[Backend] {}", client.backend_label());
 }
 
 fn print_chat_commands_hint() {
     println!("输入 `/` 可查看命令。");
-    println!("示例：`/model`、`/skill <skill名> <输入>`、`/connect openai`");
     println!();
 }
 
@@ -789,6 +797,93 @@ fn handle_cron_command(paths: &AgentPaths, command: CronCommand) -> Result<()> {
                 println!("Removed job: {id}");
             } else {
                 println!("Job not found: {id}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
+    match command {
+        HookCommand::AddGit {
+            repo,
+            command,
+            reference,
+            interval,
+            name,
+            retry_max,
+        } => {
+            let hook =
+                hooks::add_git_hook(paths, repo, reference, interval, command, name, retry_max)?;
+            println!("Added hook:");
+            println!("id: {}", hook.id);
+            println!("name: {}", hook.name);
+            println!("source: {}", hook.source.as_str());
+            println!("target: {}", hook.target);
+            println!("reference: {}", hook.reference.as_deref().unwrap_or("HEAD"));
+            println!("interval_secs: {}", hook.interval_secs);
+            println!("command: {}", hook.command);
+            let event = format!(
+                "用户创建了 hook：name={}，source={}，target={}，command={}",
+                hook.name,
+                hook.source.as_str(),
+                hook.target,
+                hook.command
+            );
+            memory::append_short_term(paths, "hook.add", &event)?;
+            let _ = memory::auto_capture_event(paths, "hook.add", &event)?;
+        }
+        HookCommand::AddP4 {
+            depot,
+            command,
+            interval,
+            name,
+            retry_max,
+        } => {
+            let hook = hooks::add_p4_hook(paths, depot, interval, command, name, retry_max)?;
+            println!("Added hook:");
+            println!("id: {}", hook.id);
+            println!("name: {}", hook.name);
+            println!("source: {}", hook.source.as_str());
+            println!("target: {}", hook.target);
+            println!("interval_secs: {}", hook.interval_secs);
+            println!("command: {}", hook.command);
+            let event = format!(
+                "用户创建了 hook：name={}，source={}，target={}，command={}",
+                hook.name,
+                hook.source.as_str(),
+                hook.target,
+                hook.command
+            );
+            memory::append_short_term(paths, "hook.add", &event)?;
+            let _ = memory::auto_capture_event(paths, "hook.add", &event)?;
+        }
+        HookCommand::List => {
+            let hooks = hooks::load_hooks(paths)?;
+            if hooks.is_empty() {
+                println!("当前没有 hook 任务。");
+            } else {
+                for hook in hooks {
+                    println!(
+                        "{} | {} | {} | target={} | ref={} | interval={}s | retry={} | {}",
+                        hook.id,
+                        hook.name,
+                        hook.source.as_str(),
+                        hook.target,
+                        hook.reference.as_deref().unwrap_or("-"),
+                        hook.interval_secs,
+                        hook.retry_max,
+                        hook.command
+                    );
+                }
+            }
+        }
+        HookCommand::Remove { id } => {
+            let removed = hooks::remove_hook(paths, &id)?;
+            if removed {
+                println!("Removed hook: {id}");
+            } else {
+                println!("Hook not found: {id}");
             }
         }
     }
