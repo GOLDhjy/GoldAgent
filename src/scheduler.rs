@@ -158,8 +158,10 @@ async fn run_job_loop(paths: AgentPaths, job: Job) -> Result<()> {
 }
 
 async fn execute_with_retry(paths: &AgentPaths, job: &Job) {
+    let effective_command = effective_job_command(&job.command);
+
     for attempt in 0..=job.retry_max {
-        let result = shell::run_shell_command(&job.command, false).await;
+        let result = shell::run_shell_command(&effective_command, false).await;
 
         match result {
             Ok(output) => {
@@ -190,6 +192,56 @@ async fn execute_with_retry(paths: &AgentPaths, job: &Job) {
             }
         }
     }
+}
+
+fn effective_job_command(command: &str) -> String {
+    let Some(message) = parse_goldagent_run_message(command) else {
+        return command.to_string();
+    };
+
+    if is_reminder_message(&message) {
+        build_goldagent_remind_command(&message)
+    } else {
+        command.to_string()
+    }
+}
+
+fn parse_goldagent_run_message(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    let content = trimmed
+        .strip_prefix("goldagent run \"")?
+        .strip_suffix('\"')?;
+    Some(unescape_quoted(content))
+}
+
+fn unescape_quoted(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn is_reminder_message(message: &str) -> bool {
+    let trimmed = message.trim();
+    trimmed.starts_with("提醒")
+        || trimmed.starts_with("到点")
+        || trimmed.to_ascii_lowercase().starts_with("remind")
+}
+
+fn build_goldagent_remind_command(message: &str) -> String {
+    let normalized = message.replace(['\r', '\n'], " ");
+    let escaped = normalized.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("goldagent remind \"{}\"", escaped.trim())
 }
 
 async fn run_hook_loop(paths: AgentPaths, hook: Hook) -> Result<()> {
@@ -272,5 +324,22 @@ async fn execute_hook_with_retry(paths: &AgentPaths, hook: &Hook, previous: &str
                 sleep(Duration::from_secs(3)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_job_command;
+
+    #[test]
+    fn upgrades_legacy_run_reminder_command() {
+        let out = effective_job_command("goldagent run \"提醒我喝水\"");
+        assert_eq!(out, "goldagent remind \"提醒我喝水\"");
+    }
+
+    #[test]
+    fn keeps_non_reminder_run_command() {
+        let out = effective_job_command("goldagent run \"总结今天工作\"");
+        assert_eq!(out, "goldagent run \"总结今天工作\"");
     }
 }

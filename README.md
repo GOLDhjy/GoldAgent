@@ -108,6 +108,9 @@ goldagent --help
 # 单轮任务
 cargo run -- run "帮我总结今天工作并列出3个下一步"
 
+# 本地提醒（用于 cron/hook 触发时直接提醒）
+cargo run -- remind "提醒我喝水"
+
 # 循环对话（默认）
 cargo run
 

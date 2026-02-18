@@ -6,6 +6,7 @@ mod daemon;
 mod hooks;
 mod jobs;
 mod memory;
+mod notify;
 mod provider;
 mod scheduler;
 mod shell;
@@ -39,6 +40,9 @@ async fn main() -> Result<()> {
         }
         Commands::Run { task, model } => {
             run_task(&paths, &task, model).await?;
+        }
+        Commands::Remind { message } => {
+            run_remind_command(&paths, &message)?;
         }
         Commands::Serve => {
             scheduler::serve(paths).await?;
@@ -78,6 +82,27 @@ async fn run_task(paths: &AgentPaths, task: &str, model: Option<String>) -> Resu
         &format!("task:\n{task}\n\nresponse:\n{response}"),
     )?;
     memory::auto_capture_long_term(paths, "run.task", task)?;
+    Ok(())
+}
+
+fn run_remind_command(paths: &AgentPaths, message: &str) -> Result<()> {
+    let msg = message.trim();
+    if msg.is_empty() {
+        println!("提醒内容为空，已忽略。");
+        return Ok(());
+    }
+
+    println!("{msg}");
+    let _ = notify::send_notification("GoldAgent 提醒", msg);
+    memory::append_short_term(
+        paths,
+        "remind.fire",
+        &format!(
+            "time={}\nmessage={}",
+            chrono::Local::now().to_rfc3339(),
+            msg
+        ),
+    )?;
     Ok(())
 }
 

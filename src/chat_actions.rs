@@ -65,6 +65,27 @@ pub(crate) fn build_run_task_command(task: &str) -> String {
     format!("goldagent run \"{}\"", escaped.trim())
 }
 
+fn build_remind_command(message: &str) -> String {
+    let normalized = message.replace(['\r', '\n'], " ");
+    let escaped = normalized.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("goldagent remind \"{}\"", escaped.trim())
+}
+
+fn is_reminder_task(task: &str) -> bool {
+    let trimmed = task.trim();
+    trimmed.starts_with("提醒")
+        || trimmed.starts_with("到点")
+        || trimmed.to_ascii_lowercase().starts_with("remind")
+}
+
+fn build_scheduled_task_command(task: &str) -> String {
+    if is_reminder_task(task) {
+        build_remind_command(task)
+    } else {
+        build_run_task_command(task)
+    }
+}
+
 pub(crate) fn extract_local_action_from_response(
     raw: &str,
 ) -> (Option<ChatLocalAction>, String, Option<String>) {
@@ -100,7 +121,7 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             name,
             retry_max,
         } => {
-            let command = build_run_task_command(&task);
+            let command = build_scheduled_task_command(&task);
             let job = jobs::add_job(paths, schedule, command, name, retry_max)?;
             let event = format!(
                 "用户通过聊天创建了定时任务：name={}，schedule={}，command={}",
@@ -154,7 +175,7 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             name,
             retry_max,
         } => {
-            let command = build_run_task_command(&task);
+            let command = build_scheduled_task_command(&task);
             let hook = hooks::add_git_hook(
                 paths,
                 repo,
@@ -202,7 +223,7 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             name,
             retry_max,
         } => {
-            let command = build_run_task_command(&task);
+            let command = build_scheduled_task_command(&task);
             let hook = hooks::add_p4_hook(paths, depot, interval_secs, command, name, retry_max)?;
             let event = format!(
                 "用户通过聊天创建了 hook：name={}，source={}，target={}，command={}",
@@ -268,7 +289,10 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatLocalAction, build_run_task_command, extract_local_action_from_response};
+    use super::{
+        ChatLocalAction, build_run_task_command, build_scheduled_task_command,
+        extract_local_action_from_response,
+    };
 
     #[test]
     fn parses_cron_add_action_line() {
@@ -300,5 +324,11 @@ mod tests {
     fn escapes_run_task_command() {
         let out = build_run_task_command("提醒我说 \"hello\"");
         assert_eq!(out, "goldagent run \"提醒我说 \\\"hello\\\"\"");
+    }
+
+    #[test]
+    fn uses_remind_command_for_reminder_task() {
+        let out = build_scheduled_task_command("提醒我喝水");
+        assert_eq!(out, "goldagent remind \"提醒我喝水\"");
     }
 }

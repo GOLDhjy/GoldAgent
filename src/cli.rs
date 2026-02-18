@@ -22,6 +22,8 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
     },
+    /// 触发一次本地提醒（可用于定时任务）
+    Remind { message: String },
     /// 启动后台定时任务服务
     Serve,
     /// 执行一条 shell 命令
