@@ -1,4 +1,5 @@
 use crate::config::AgentPaths;
+use crate::daemon;
 use crate::hooks;
 use crate::jobs;
 use crate::memory;
@@ -107,9 +108,20 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             );
             memory::append_short_term(paths, "cron.add", &event)?;
             let _ = memory::auto_capture_event(paths, "cron.add", &event)?;
+            let scheduler_note = match daemon::ensure_scheduler_running(paths) {
+                Ok(daemon::SchedulerStatus::Started(pid)) => {
+                    format!("已自动启动调度服务（pid={pid}）。")
+                }
+                Ok(daemon::SchedulerStatus::Reloaded(pid)) => {
+                    format!("已重载调度服务以应用新任务（pid={pid}）。")
+                }
+                Err(err) => format!(
+                    "警告：任务已创建，但自动启动调度服务失败：{err}。请手动执行 `goldagent serve`。"
+                ),
+            };
             Ok(format!(
-                "已自动创建定时任务：{} | {} | {} | retry={} | {}",
-                job.id, job.name, job.schedule, job.retry_max, job.command
+                "已自动创建定时任务：{} | {} | {} | retry={} | {}\n{}",
+                job.id, job.name, job.schedule, job.retry_max, job.command, scheduler_note
             ))
         }
         ChatLocalAction::CronList => {
@@ -161,14 +173,26 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             );
             memory::append_short_term(paths, "hook.add", &event)?;
             let _ = memory::auto_capture_event(paths, "hook.add", &event)?;
+            let scheduler_note = match daemon::ensure_scheduler_running(paths) {
+                Ok(daemon::SchedulerStatus::Started(pid)) => {
+                    format!("已自动启动调度服务（pid={pid}）。")
+                }
+                Ok(daemon::SchedulerStatus::Reloaded(pid)) => {
+                    format!("已重载调度服务以应用新任务（pid={pid}）。")
+                }
+                Err(err) => format!(
+                    "警告：任务已创建，但自动启动调度服务失败：{err}。请手动执行 `goldagent serve`。"
+                ),
+            };
             Ok(format!(
-                "已自动创建 Git hook：{} | {} | ref={} | interval={}s | retry={} | {}",
+                "已自动创建 Git hook：{} | {} | ref={} | interval={}s | retry={} | {}\n{}",
                 hook.id,
                 hook.name,
                 hook.reference.as_deref().unwrap_or("HEAD"),
                 hook.interval_secs,
                 hook.retry_max,
-                hook.command
+                hook.command,
+                scheduler_note
             ))
         }
         ChatLocalAction::HookAddP4 {
@@ -189,9 +213,25 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             );
             memory::append_short_term(paths, "hook.add", &event)?;
             let _ = memory::auto_capture_event(paths, "hook.add", &event)?;
+            let scheduler_note = match daemon::ensure_scheduler_running(paths) {
+                Ok(daemon::SchedulerStatus::Started(pid)) => {
+                    format!("已自动启动调度服务（pid={pid}）。")
+                }
+                Ok(daemon::SchedulerStatus::Reloaded(pid)) => {
+                    format!("已重载调度服务以应用新任务（pid={pid}）。")
+                }
+                Err(err) => format!(
+                    "警告：任务已创建，但自动启动调度服务失败：{err}。请手动执行 `goldagent serve`。"
+                ),
+            };
             Ok(format!(
-                "已自动创建 P4 hook：{} | {} | interval={}s | retry={} | {}",
-                hook.id, hook.name, hook.interval_secs, hook.retry_max, hook.command
+                "已自动创建 P4 hook：{} | {} | interval={}s | retry={} | {}\n{}",
+                hook.id,
+                hook.name,
+                hook.interval_secs,
+                hook.retry_max,
+                hook.command,
+                scheduler_note
             ))
         }
         ChatLocalAction::HookList => {

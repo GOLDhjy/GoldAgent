@@ -2,6 +2,7 @@ mod chat_actions;
 mod cli;
 mod config;
 mod connect;
+mod daemon;
 mod hooks;
 mod jobs;
 mod memory;
@@ -835,6 +836,21 @@ fn trim_history(messages: &mut Vec<ChatMessage>, max_non_system: usize) {
     messages.extend(trimmed);
 }
 
+fn print_scheduler_auto_start_result(paths: &AgentPaths) {
+    match daemon::ensure_scheduler_running(paths) {
+        Ok(daemon::SchedulerStatus::Started(pid)) => {
+            println!("已自动启动调度服务（pid={pid}）。");
+        }
+        Ok(daemon::SchedulerStatus::Reloaded(pid)) => {
+            println!("已重载调度服务以应用新任务（pid={pid}）。");
+        }
+        Err(err) => {
+            eprintln!("警告：任务已创建，但自动启动调度服务失败：{err}");
+            eprintln!("请手动执行：goldagent serve");
+        }
+    }
+}
+
 fn handle_cron_command(paths: &AgentPaths, command: CronCommand) -> Result<()> {
     match command {
         CronCommand::Add {
@@ -849,6 +865,7 @@ fn handle_cron_command(paths: &AgentPaths, command: CronCommand) -> Result<()> {
             println!("name: {}", job.name);
             println!("schedule: {}", job.schedule);
             println!("command: {}", job.command);
+            print_scheduler_auto_start_result(paths);
             let event = format!(
                 "用户创建了定时任务：name={}，schedule={}，command={}",
                 job.name, job.schedule, job.command
@@ -901,6 +918,7 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
             println!("reference: {}", hook.reference.as_deref().unwrap_or("HEAD"));
             println!("interval_secs: {}", hook.interval_secs);
             println!("command: {}", hook.command);
+            print_scheduler_auto_start_result(paths);
             let event = format!(
                 "用户创建了 hook：name={}，source={}，target={}，command={}",
                 hook.name,
@@ -926,6 +944,7 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
             println!("target: {}", hook.target);
             println!("interval_secs: {}", hook.interval_secs);
             println!("command: {}", hook.command);
+            print_scheduler_auto_start_result(paths);
             let event = format!(
                 "用户创建了 hook：name={}，source={}，target={}，command={}",
                 hook.name,

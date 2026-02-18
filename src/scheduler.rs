@@ -6,11 +6,23 @@ use crate::shell;
 use anyhow::Result;
 use chrono::Local;
 use cron::Schedule;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
 use std::str::FromStr;
 use tokio::signal;
 use tokio::time::{Duration, sleep};
 
 pub async fn serve(paths: AgentPaths) -> Result<()> {
+    let Some(_pid_guard) = SchedulerPidGuard::acquire(&paths)? else {
+        if let Some(pid) = running_pid(&paths)? {
+            println!("GoldAgent scheduler already running (pid={pid}).");
+        } else {
+            println!("GoldAgent scheduler already running.");
+        }
+        return Ok(());
+    };
+
     let jobs = jobs::load_jobs(&paths)?;
     let hooks = hooks::load_hooks(&paths)?;
 
@@ -48,6 +60,77 @@ pub async fn serve(paths: AgentPaths) -> Result<()> {
     signal::ctrl_c().await?;
     println!("GoldAgent scheduler stopped.");
     Ok(())
+}
+
+pub fn running_pid(paths: &AgentPaths) -> Result<Option<u32>> {
+    let pid_file = scheduler_pid_file(paths);
+    let raw = match fs::read_to_string(&pid_file) {
+        Ok(value) => value,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+
+    let trimmed = raw.trim();
+    let Ok(pid) = trimmed.parse::<u32>() else {
+        let _ = fs::remove_file(&pid_file);
+        return Ok(None);
+    };
+
+    if process_is_alive(pid) {
+        Ok(Some(pid))
+    } else {
+        let _ = fs::remove_file(&pid_file);
+        Ok(None)
+    }
+}
+
+fn scheduler_pid_file(paths: &AgentPaths) -> PathBuf {
+    paths.root.join("scheduler.pid")
+}
+
+struct SchedulerPidGuard {
+    path: PathBuf,
+}
+
+impl SchedulerPidGuard {
+    fn acquire(paths: &AgentPaths) -> Result<Option<Self>> {
+        if let Some(pid) = running_pid(paths)?
+            && pid != std::process::id()
+        {
+            return Ok(None);
+        }
+
+        let path = scheduler_pid_file(paths);
+        fs::write(&path, format!("{}\n", std::process::id()))?;
+        Ok(Some(Self { path }))
+    }
+}
+
+impl Drop for SchedulerPidGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(unix)]
+fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let rc = unsafe { libc::kill(pid as i32, 0) };
+    if rc == 0 {
+        true
+    } else {
+        matches!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(code) if code == libc::EPERM
+        )
+    }
+}
+
+#[cfg(not(unix))]
+fn process_is_alive(_pid: u32) -> bool {
+    false
 }
 
 async fn run_job_loop(paths: AgentPaths, job: Job) -> Result<()> {
