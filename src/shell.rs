@@ -30,6 +30,20 @@ pub async fn run_shell_command(command: &str, force: bool) -> Result<ShellOutput
     })
 }
 
+/// Like `run_shell_command` but does not bail on non-zero exit codes.
+/// Used by hook diff fetching where a partial/empty diff is acceptable.
+pub async fn run_shell_command_lenient(command: &str) -> Result<ShellOutput> {
+    if is_dangerous(command) {
+        bail!("Blocked potentially dangerous command.");
+    }
+    let output = Command::new("zsh").arg("-lc").arg(command).output().await?;
+    Ok(ShellOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
 fn is_dangerous(command: &str) -> bool {
     let lowered = command.to_lowercase();
     [

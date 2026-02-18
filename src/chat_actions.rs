@@ -34,6 +34,10 @@ pub(crate) enum ChatLocalAction {
         name: Option<String>,
         #[serde(default = "default_retry_max")]
         retry_max: u8,
+        #[serde(default)]
+        rules_file: Option<String>,
+        #[serde(default)]
+        report_file: Option<String>,
     },
     HookAddP4 {
         depot: String,
@@ -44,10 +48,18 @@ pub(crate) enum ChatLocalAction {
         name: Option<String>,
         #[serde(default = "default_retry_max")]
         retry_max: u8,
+        #[serde(default)]
+        rules_file: Option<String>,
+        #[serde(default)]
+        report_file: Option<String>,
     },
     HookList,
     HookRemove {
         id: String,
+    },
+    HookRulesNew {
+        #[serde(default = "default_rules_path")]
+        path: String,
     },
 }
 
@@ -57,6 +69,10 @@ fn default_retry_max() -> u8 {
 
 fn default_hook_interval_secs() -> u64 {
     30
+}
+
+fn default_rules_path() -> String {
+    "./review-rules.md".to_string()
 }
 
 pub(crate) fn build_run_task_command(task: &str) -> String {
@@ -174,8 +190,14 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             interval_secs,
             name,
             retry_max,
+            rules_file,
+            report_file,
         } => {
-            let command = build_scheduled_task_command(&task);
+            let command = if rules_file.is_some() {
+                String::new()
+            } else {
+                build_scheduled_task_command(&task)
+            };
             let hook = hooks::add_git_hook(
                 paths,
                 repo,
@@ -184,6 +206,8 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
                 command,
                 name,
                 retry_max,
+                rules_file,
+                report_file,
             )?;
             let event = format!(
                 "用户通过聊天创建了 hook：name={}，source={}，target={}，command={}",
@@ -205,6 +229,15 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
                     "警告：任务已创建，但自动启动调度服务失败：{err}。请手动执行 `goldagent serve`。"
                 ),
             };
+            let mode = if let Some(ref rf) = hook.rules_file {
+                format!(
+                    "LLM审查 rules={} report={}",
+                    rf,
+                    hook.report_file.as_deref().unwrap_or("<target>/goldagent-review.md")
+                )
+            } else {
+                format!("command={}", hook.command)
+            };
             Ok(format!(
                 "已自动创建 Git hook：{} | {} | ref={} | interval={}s | retry={} | {}\n{}",
                 hook.id,
@@ -212,7 +245,7 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
                 hook.reference.as_deref().unwrap_or("HEAD"),
                 hook.interval_secs,
                 hook.retry_max,
-                hook.command,
+                mode,
                 scheduler_note
             ))
         }
@@ -222,9 +255,16 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             interval_secs,
             name,
             retry_max,
+            rules_file,
+            report_file,
         } => {
-            let command = build_scheduled_task_command(&task);
-            let hook = hooks::add_p4_hook(paths, depot, interval_secs, command, name, retry_max)?;
+            let command = if rules_file.is_some() {
+                String::new()
+            } else {
+                build_scheduled_task_command(&task)
+            };
+            let hook =
+                hooks::add_p4_hook(paths, depot, interval_secs, command, name, retry_max, rules_file, report_file)?;
             let event = format!(
                 "用户通过聊天创建了 hook：name={}，source={}，target={}，command={}",
                 hook.name,
@@ -245,13 +285,22 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
                     "警告：任务已创建，但自动启动调度服务失败：{err}。请手动执行 `goldagent serve`。"
                 ),
             };
+            let mode = if let Some(ref rf) = hook.rules_file {
+                format!(
+                    "LLM审查 rules={} report={}",
+                    rf,
+                    hook.report_file.as_deref().unwrap_or("<target>/goldagent-review.md")
+                )
+            } else {
+                format!("command={}", hook.command)
+            };
             Ok(format!(
                 "已自动创建 P4 hook：{} | {} | interval={}s | retry={} | {}\n{}",
                 hook.id,
                 hook.name,
                 hook.interval_secs,
                 hook.retry_max,
-                hook.command,
+                mode,
                 scheduler_note
             ))
         }
@@ -283,6 +332,12 @@ pub(crate) fn execute_local_action(paths: &AgentPaths, action: ChatLocalAction) 
             } else {
                 Ok(format!("未找到 hook：{id}"))
             }
+        }
+        ChatLocalAction::HookRulesNew { path } => {
+            hooks::write_rules_template(&path)?;
+            Ok(format!(
+                "已生成审查规则模板：{path}\n编辑完成后告诉我仓库路径，我来帮你创建 hook。"
+            ))
         }
     }
 }

@@ -13,7 +13,7 @@ mod shell;
 mod skills;
 mod usage;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chat_actions::{execute_local_action, extract_local_action_from_response};
 use clap::Parser;
 use cli::{Cli, Commands, CronCommand, HookCommand, SkillCommand};
@@ -241,10 +241,11 @@ Supported kinds:\n\
 - cron_add {schedule, task, optional name, optional retry_max}\n\
 - cron_list {}\n\
 - cron_remove {id}\n\
-- hook_add_git {repo, task, optional reference, optional interval_secs, optional name, optional retry_max}\n\
-- hook_add_p4 {depot, task, optional interval_secs, optional name, optional retry_max}\n\
+- hook_add_git {repo, task, optional reference, optional interval_secs, optional name, optional retry_max, optional rules_file(LLM审查模式：填规则文件路径，设置后忽略task), optional report_file}\n\
+- hook_add_p4 {depot, task, optional interval_secs, optional name, optional retry_max, optional rules_file(LLM审查模式：填规则文件路径，设置后忽略task), optional report_file}\n\
 - hook_list {}\n\
 - hook_remove {id}\n\
+- hook_rules_new {optional path}\n\
 Rules:\n\
 - If required fields are missing or ambiguous, ask follow-up questions and DO NOT emit LOCAL_ACTION.\n\
 - If the user clearly requests execution, prefer emitting LOCAL_ACTION rather than giving command suggestions.\n\n",
@@ -928,13 +929,28 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
         HookCommand::AddGit {
             repo,
             command,
+            rules_file,
+            report_file,
             reference,
             interval,
             name,
             retry_max,
         } => {
-            let hook =
-                hooks::add_git_hook(paths, repo, reference, interval, command, name, retry_max)?;
+            if command.is_none() && rules_file.is_none() {
+                bail!("必须提供 --command 或 --rules-file 之一");
+            }
+            let command = command.unwrap_or_default();
+            let hook = hooks::add_git_hook(
+                paths,
+                repo,
+                reference,
+                interval,
+                command,
+                name,
+                retry_max,
+                rules_file,
+                report_file,
+            )?;
             println!("Added hook:");
             println!("id: {}", hook.id);
             println!("name: {}", hook.name);
@@ -942,13 +958,24 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
             println!("target: {}", hook.target);
             println!("reference: {}", hook.reference.as_deref().unwrap_or("HEAD"));
             println!("interval_secs: {}", hook.interval_secs);
-            println!("command: {}", hook.command);
+            if let Some(ref rf) = hook.rules_file {
+                println!("rules_file: {rf}");
+                println!(
+                    "report_file: {}",
+                    hook.report_file
+                        .as_deref()
+                        .unwrap_or("<target>/goldagent-review.md")
+                );
+            } else {
+                println!("command: {}", hook.command);
+            }
             print_scheduler_auto_start_result(paths);
             let event = format!(
-                "用户创建了 hook：name={}，source={}，target={}，command={}",
+                "用户创建了 hook：name={}，source={}，target={}，rules_file={:?}，command={}",
                 hook.name,
                 hook.source.as_str(),
                 hook.target,
+                hook.rules_file,
                 hook.command
             );
             memory::append_short_term(paths, "hook.add", &event)?;
@@ -957,24 +984,50 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
         HookCommand::AddP4 {
             depot,
             command,
+            rules_file,
+            report_file,
             interval,
             name,
             retry_max,
         } => {
-            let hook = hooks::add_p4_hook(paths, depot, interval, command, name, retry_max)?;
+            if command.is_none() && rules_file.is_none() {
+                bail!("必须提供 --command 或 --rules-file 之一");
+            }
+            let command = command.unwrap_or_default();
+            let hook = hooks::add_p4_hook(
+                paths,
+                depot,
+                interval,
+                command,
+                name,
+                retry_max,
+                rules_file,
+                report_file,
+            )?;
             println!("Added hook:");
             println!("id: {}", hook.id);
             println!("name: {}", hook.name);
             println!("source: {}", hook.source.as_str());
             println!("target: {}", hook.target);
             println!("interval_secs: {}", hook.interval_secs);
-            println!("command: {}", hook.command);
+            if let Some(ref rf) = hook.rules_file {
+                println!("rules_file: {rf}");
+                println!(
+                    "report_file: {}",
+                    hook.report_file
+                        .as_deref()
+                        .unwrap_or("<target>/goldagent-review.md")
+                );
+            } else {
+                println!("command: {}", hook.command);
+            }
             print_scheduler_auto_start_result(paths);
             let event = format!(
-                "用户创建了 hook：name={}，source={}，target={}，command={}",
+                "用户创建了 hook：name={}，source={}，target={}，rules_file={:?}，command={}",
                 hook.name,
                 hook.source.as_str(),
                 hook.target,
+                hook.rules_file,
                 hook.command
             );
             memory::append_short_term(paths, "hook.add", &event)?;
@@ -1007,6 +1060,12 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
             } else {
                 println!("Hook not found: {id}");
             }
+        }
+        HookCommand::RulesNew { path } => {
+            hooks::write_rules_template(&path)?;
+            println!("已生成规则模板：{path}");
+            println!("编辑完成后，用以下命令创建 hook：");
+            println!("  goldagent hook add-git <repo> --ref main --rules-file {path}");
         }
     }
     Ok(())

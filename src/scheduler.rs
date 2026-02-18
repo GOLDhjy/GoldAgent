@@ -1,14 +1,15 @@
 use crate::config::AgentPaths;
-use crate::hooks::{self, Hook};
+use crate::hooks::{self, Hook, HookSource};
 use crate::jobs::{self, Job};
 use crate::memory;
+use crate::provider::{ChatMessage, ProviderClient};
 use crate::shell;
 use anyhow::Result;
 use chrono::Local;
 use cron::Schedule;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::signal;
 use tokio::time::{Duration, sleep};
@@ -266,7 +267,11 @@ async fn run_hook_loop(paths: AgentPaths, hook: Hook) -> Result<()> {
                 }
 
                 if current != last_seen {
-                    execute_hook_with_retry(&paths, &hook, &last_seen, &current).await;
+                    if hook.rules_file.is_some() {
+                        execute_llm_hook(&paths, &hook, &last_seen, &current).await;
+                    } else {
+                        execute_hook_with_retry(&paths, &hook, &last_seen, &current).await;
+                    }
                     last_seen = current;
                 }
             }
@@ -325,6 +330,111 @@ async fn execute_hook_with_retry(paths: &AgentPaths, hook: &Hook, previous: &str
             }
         }
     }
+}
+
+async fn execute_llm_hook(paths: &AgentPaths, hook: &Hook, prev: &str, curr: &str) {
+    let rules_path = hook.rules_file.as_deref().unwrap_or("");
+    let prompt = match std::fs::read_to_string(rules_path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("[hook {}] 读取规则文件失败 {rules_path}: {e}", hook.id);
+            return;
+        }
+    };
+
+    let diff = fetch_diff(hook, prev, curr).await;
+    let user_content = match diff {
+        Some(ref d) if !d.trim().is_empty() => {
+            format!("{prompt}\n\n```diff\n{d}\n```")
+        }
+        _ => prompt.to_string(),
+    };
+
+    let messages = vec![
+        ChatMessage::system(
+            "You are an automated code reviewer. Be concise and focus on actionable issues.",
+        ),
+        ChatMessage::user(user_content),
+    ];
+
+    let client = match ProviderClient::from_paths(paths, None) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[hook {}] LLM client error: {e}", hook.id);
+            return;
+        }
+    };
+    let response = match client.chat(&messages).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[hook {}] LLM call failed: {e}", hook.id);
+            return;
+        }
+    };
+
+    let report_path = resolve_report_path(hook);
+    append_review_report(&report_path, &hook.source, prev, curr, &response);
+
+    let summary = format!(
+        "hook.{} llm-review: {} → {}\nreport: {}\nresponse(截断): {}",
+        hook.id,
+        prev,
+        curr,
+        report_path.display(),
+        response.chars().take(200).collect::<String>()
+    );
+    let _ = memory::append_short_term(paths, &format!("hook.{}", hook.id), &summary);
+}
+
+async fn fetch_diff(hook: &Hook, prev: &str, curr: &str) -> Option<String> {
+    let escaped_target = hook.target.replace('\'', "'\"'\"'");
+    let cmd = match hook.source {
+        HookSource::Git => format!("git -C '{escaped_target}' diff {prev} {curr}"),
+        HookSource::P4 => format!("p4 describe -du {curr}"),
+    };
+    match shell::run_shell_command_lenient(&cmd).await {
+        Ok(out) if !out.stdout.trim().is_empty() => Some(truncate_str(out.stdout, 8000)),
+        _ => None,
+    }
+}
+
+fn resolve_report_path(hook: &Hook) -> PathBuf {
+    if let Some(ref path) = hook.report_file {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from(&hook.target).join("goldagent-review.md")
+    }
+}
+
+fn append_review_report(path: &Path, source: &HookSource, prev: &str, curr: &str, response: &str) {
+    let ts = chrono::Local::now().to_rfc3339();
+    let identity = match source {
+        HookSource::Git => format!(
+            "{} → {}",
+            &prev[..7.min(prev.len())],
+            &curr[..7.min(curr.len())]
+        ),
+        HookSource::P4 => format!("CL {} → {}", prev, curr),
+    };
+    let entry = format!(
+        "## {ts} | {identity}\n\n**LLM 审查结果：**\n\n{response}\n\n---\n\n"
+    );
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(entry.as_bytes());
+    }
+}
+
+fn truncate_str(s: String, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s;
+    }
+    chars[..max].iter().collect::<String>() + "\n[...truncated]"
 }
 
 #[cfg(test)]

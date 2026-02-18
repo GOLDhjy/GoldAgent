@@ -76,7 +76,15 @@ pub enum HookCommand {
     /// 新增 Git 提交轮询触发任务
     AddGit {
         repo: String,
-        command: String,
+        /// Shell 命令（与 --rules-file 二选一）
+        #[arg(long)]
+        command: Option<String>,
+        /// LLM 审查规则文件路径（与 --command 二选一）
+        #[arg(long)]
+        rules_file: Option<String>,
+        /// LLM 审查报告输出路径（默认为 <repo>/goldagent-review.md）
+        #[arg(long)]
+        report_file: Option<String>,
         #[arg(long = "ref")]
         reference: Option<String>,
         #[arg(long, default_value_t = 30)]
@@ -89,7 +97,15 @@ pub enum HookCommand {
     /// 新增 P4 提交轮询触发任务
     AddP4 {
         depot: String,
-        command: String,
+        /// Shell 命令（与 --rules-file 二选一）
+        #[arg(long)]
+        command: Option<String>,
+        /// LLM 审查规则文件路径（与 --command 二选一）
+        #[arg(long)]
+        rules_file: Option<String>,
+        /// LLM 审查报告输出路径（默认为 <depot>/goldagent-review.md）
+        #[arg(long)]
+        report_file: Option<String>,
         #[arg(long, default_value_t = 30)]
         interval: u64,
         #[arg(long)]
@@ -101,6 +117,12 @@ pub enum HookCommand {
     List,
     /// 删除一条 hook 任务
     Remove { id: String },
+    /// 生成 LLM 审查规则文件模板
+    RulesNew {
+        /// 输出路径（默认 ./review-rules.md）
+        #[arg(default_value = "./review-rules.md")]
+        path: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

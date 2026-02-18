@@ -156,8 +156,10 @@ fn render_capability_declaration(paths: &AgentPaths) -> String {
 \n\
 ### Hook 事件触发\n\
 - 持久化文件：`{hooks_file}`\n\
-- Git hook 创建：`goldagent hook add-git <repo_path> \"goldagent run \\\"<task>\\\"\" --ref <branch_or_ref> --interval <seconds>`\n\
-- P4 hook 创建：`goldagent hook add-p4 <depot_path> \"goldagent run \\\"<task>\\\"\" --interval <seconds>`\n\
+- Shell 命令 hook：`goldagent hook add-git <repo_path> --command \"goldagent run \\\"<task>\\\"\" --ref <branch> --interval <seconds>`\n\
+- LLM 审查 hook：`goldagent hook add-git <repo_path> --rules-file <rules.md> --ref <branch> --interval <seconds>`\n\
+- 生成审查规则模板：`goldagent hook rules-new [path]`\n\
+- P4 hook：`goldagent hook add-p4 <depot_path> --command \"...\" --interval <seconds>`\n\
 - Hook 模板变量：`${{HOOK_ID}}`、`${{HOOK_NAME}}`、`${{HOOK_SOURCE}}`、`${{HOOK_TARGET}}`、`${{HOOK_REF}}`、`${{HOOK_PREVIOUS}}`、`${{HOOK_CURRENT}}`\n\
 - 管理命令：`goldagent hook list`、`goldagent hook remove <hook_id>`\n\
 \n\
