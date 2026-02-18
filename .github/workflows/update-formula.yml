@@ -1,0 +1,135 @@
+name: update-formula
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve tag
+        id: resolve
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${EVENT_TAG:-}"
+          if [ -z "$TAG" ]; then
+            TAG="${PUSH_TAG:-}"
+          fi
+          if [ -z "$TAG" ]; then
+            TAG="${INPUT_TAG:-}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "tag is empty"
+            exit 1
+          fi
+          if [[ "$TAG" != v* ]]; then
+            echo "tag must start with v, got: $TAG"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download checksums
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS.txt"
+          for i in $(seq 1 90); do
+            if curl -fsSL "$URL" -o SHA256SUMS.txt; then
+              break
+            fi
+            if [ "$i" -eq 90 ]; then
+              echo "failed to download ${URL}"
+              exit 1
+            fi
+            sleep 10
+          done
+          test -s SHA256SUMS.txt
+
+      - name: Regenerate formula
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          LINUX_SHA="$(awk '/goldagent-v.*-linux-x86_64\.tar\.gz$/ {print $1}' SHA256SUMS.txt)"
+          MAC_ARM_SHA="$(awk '/goldagent-v.*-macos-aarch64\.tar\.gz$/ {print $1}' SHA256SUMS.txt)"
+          MAC_X86_SHA="$(awk '/goldagent-v.*-macos-x86_64\.tar\.gz$/ {print $1}' SHA256SUMS.txt)"
+          if [ -z "$LINUX_SHA" ] || [ -z "$MAC_ARM_SHA" ] || [ -z "$MAC_X86_SHA" ]; then
+            echo "missing one or more required checksums"
+            cat SHA256SUMS.txt
+            exit 1
+          fi
+
+          cat > Formula/goldagent.rb <<EOF
+          class Goldagent < Formula
+            desc "GoldAgent local CLI assistant"
+            homepage "https://github.com/${REPO}"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${TAG}/goldagent-v${VERSION}-macos-aarch64.tar.gz"
+                sha256 "${MAC_ARM_SHA}"
+              else
+                url "https://github.com/${REPO}/releases/download/${TAG}/goldagent-v${VERSION}-macos-x86_64.tar.gz"
+                sha256 "${MAC_X86_SHA}"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/${REPO}/releases/download/${TAG}/goldagent-v${VERSION}-linux-x86_64.tar.gz"
+              sha256 "${LINUX_SHA}"
+            end
+
+            def install
+              bin.install "goldagent"
+            end
+
+            test do
+              assert_match "GoldAgent", shell_output("#{bin}/goldagent --help")
+            end
+          end
+          EOF
+
+      - name: Commit formula update
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Formula/goldagent.rb; then
+            echo "formula unchanged, skip commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/goldagent.rb
+          git commit -m "chore: update homebrew formula for ${TAG}"
+          git push origin "HEAD:${DEFAULT_BRANCH}"

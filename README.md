@@ -76,6 +76,7 @@ goldagent --help
 ## Homebrew 安装（Formula）
 
 本仓库已提供 Formula 文件：`Formula/goldagent.rb`
+并且发布后会自动更新（workflow：`.github/workflows/update-formula.yml`）。
 
 Homebrew 5 开始，安装第三方 Formula 需要先 `tap` 仓库。
 
@@ -86,10 +87,11 @@ brew tap GOLDhjy/goldagent https://github.com/GOLDhjy/GoldAgent
 brew install GOLDhjy/goldagent/goldagent
 ```
 
-更新（当前 Formula 跟踪 `main` 分支，推荐重装拉取最新）：
+更新：
 
 ```bash
-brew reinstall GOLDhjy/goldagent/goldagent
+brew update
+brew upgrade GOLDhjy/goldagent/goldagent
 ```
 
 卸载：

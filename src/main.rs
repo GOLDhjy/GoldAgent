@@ -540,7 +540,7 @@ fn command_inline_hint_items(paths: &AgentPaths, input: &str) -> Vec<HintItem> {
 }
 
 fn readline_with_inline_hint(paths: &AgentPaths, prompt: &str) -> io::Result<Option<String>> {
-    if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+    if !stdin_is_tty() {
         let mut stdout = io::stdout();
         write!(stdout, "{prompt}")?;
         stdout.flush()?;
@@ -745,10 +745,22 @@ fn prompt_line(prompt: &str) -> io::Result<String> {
     Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
+#[cfg(unix)]
+fn stdin_is_tty() -> bool {
+    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+}
+
+#[cfg(not(unix))]
+fn stdin_is_tty() -> bool {
+    false
+}
+
+#[cfg(unix)]
 struct RawMode {
     original: libc::termios,
 }
 
+#[cfg(unix)]
 impl RawMode {
     fn new() -> io::Result<Self> {
         let fd = libc::STDIN_FILENO;
@@ -770,9 +782,20 @@ impl RawMode {
     }
 }
 
+#[cfg(unix)]
 impl Drop for RawMode {
     fn drop(&mut self) {
         let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
+    }
+}
+
+#[cfg(not(unix))]
+struct RawMode;
+
+#[cfg(not(unix))]
+impl RawMode {
+    fn new() -> io::Result<Self> {
+        Ok(Self)
     }
 }
 

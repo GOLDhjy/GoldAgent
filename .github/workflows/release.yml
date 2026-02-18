@@ -25,7 +25,7 @@ jobs:
             archive: tar.gz
             suffix: linux-x86_64
             bin_ext: ""
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
             archive: tar.gz
             suffix: macos-x86_64
