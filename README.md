@@ -40,6 +40,39 @@ codex login
 cargo run
 ```
 
+## 发布与下载（二进制）
+
+仓库已提供自动发布工作流：`.github/workflows/release.yml`
+
+发布步骤（维护者）：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+触发后会自动构建并上传到 GitHub Release：
+
+- `goldagent-v0.1.0-linux-x86_64.tar.gz`
+- `goldagent-v0.1.0-macos-x86_64.tar.gz`
+- `goldagent-v0.1.0-macos-aarch64.tar.gz`
+- `goldagent-v0.1.0-windows-x86_64.zip`
+- `SHA256SUMS.txt`
+
+下载方式（用户）：
+
+1. 打开仓库的 `Releases` 页面下载对应平台压缩包。
+2. 解压后把 `goldagent`（Windows 为 `goldagent.exe`）放到系统 `PATH`。
+
+例如 macOS/Linux：
+
+```bash
+tar -xzf goldagent-v0.1.0-macos-aarch64.tar.gz
+chmod +x goldagent-v0.1.0-macos-aarch64/goldagent
+mv goldagent-v0.1.0-macos-aarch64/goldagent /usr/local/bin/
+goldagent --help
+```
+
 ## 常用命令
 
 ```bash
