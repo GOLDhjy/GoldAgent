@@ -15,7 +15,14 @@ use uuid::Uuid;
 const ZHIPU_GENERAL_CHAT_ENDPOINT: &str = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const ZHIPU_CODING_CHAT_ENDPOINT: &str =
     "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions";
+const OPENAI_CODEX_LOGIN_LATEST_MODEL: &str = "gpt-5.3-codex";
 const OPENAI_CODEX_BASE_MODEL: &str = "gpt-5.2-codex";
+const OPENAI_CODEX_LOGIN_TIER_MODELS: [&str; 4] = [
+    "gpt-5.3-codex@low",
+    "gpt-5.3-codex@medium",
+    "gpt-5.3-codex@high",
+    "gpt-5.3-codex@xhigh",
+];
 const OPENAI_CODEX_TIER_MODELS: [&str; 4] = [
     "gpt-5.2-codex@low",
     "gpt-5.2-codex@medium",
@@ -378,6 +385,14 @@ pub fn print_model_overview(paths: &AgentPaths) -> Result<()> {
         .map(str::to_string)
         .collect::<Vec<_>>();
     if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::CodexLogin)
+    {
+        if !models.iter().any(|m| m == OPENAI_CODEX_LOGIN_LATEST_MODEL) {
+            models.insert(0, OPENAI_CODEX_LOGIN_LATEST_MODEL.to_string());
+        }
+        append_openai_login_codex_tiers(&mut models);
+    }
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
         && matches!(cfg.mode, connect::ConnectMode::OpenAIApi)
     {
         for codex_tier in OPENAI_CODEX_TIER_MODELS {
@@ -407,6 +422,11 @@ pub fn print_model_overview(paths: &AgentPaths) -> Result<()> {
         println!(
             "- Codex 分档: `gpt-5.2-codex@low|medium|high|xhigh`（使用官方 reasoning effort）"
         );
+    }
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::CodexLogin)
+    {
+        println!("- 登录态 Codex 分档: `gpt-5.3-codex@low|medium|high|xhigh`");
     }
     println!("- 说明: 列表是内置推荐，若新版本未收录可直接输入 `/model <模型名>`。");
     Ok(())
@@ -481,16 +501,34 @@ pub fn print_connect_status(paths: &AgentPaths) -> Result<()> {
 
 pub fn suggested_models(provider: &ConnectProvider) -> Vec<&'static str> {
     match provider {
-        ConnectProvider::OpenAi => vec![
-            "gpt-5.2",
-            "gpt-5.2-codex",
-        ],
-        ConnectProvider::Anthropic => vec![
-            "claude-opus-4-6",
-            "claude-sonnet-4-5",
-            "claude-haiku-4-5",
-        ],
+        ConnectProvider::OpenAi => vec!["gpt-5.2", "gpt-5.2-codex"],
+        ConnectProvider::Anthropic => {
+            vec!["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
+        }
         ConnectProvider::Zhipu => vec!["glm-5", "glm-4.7", "glm-4.7-flash"],
+    }
+}
+
+fn suggested_login_models(provider: &ConnectProvider) -> Vec<&'static str> {
+    match provider {
+        ConnectProvider::OpenAi => vec![
+            OPENAI_CODEX_LOGIN_LATEST_MODEL,
+            "gpt-5.3-codex@low",
+            "gpt-5.3-codex@medium",
+            "gpt-5.3-codex@high",
+            "gpt-5.3-codex@xhigh",
+            "gpt-5.2-codex",
+            "gpt-5.2",
+        ],
+        _ => suggested_models(provider),
+    }
+}
+
+fn append_openai_login_codex_tiers(models: &mut Vec<String>) {
+    for tier in OPENAI_CODEX_LOGIN_TIER_MODELS {
+        if !models.iter().any(|m| m == tier) {
+            models.push(tier.to_string());
+        }
     }
 }
 
@@ -666,7 +704,7 @@ pub fn connect_hint_items(rest: &str) -> Vec<HintItem> {
                     desc: "回车切换到 OpenAI 登录态".to_string(),
                     completion: format!("/connect {provider_cmd} login"),
                 }];
-                for model in suggested_models(&ConnectProvider::OpenAi) {
+                for model in suggested_login_models(&ConnectProvider::OpenAi) {
                     items.push(HintItem {
                         label: model.to_string(),
                         desc: "登录态指定模型".to_string(),
@@ -682,7 +720,7 @@ pub fn connect_hint_items(rest: &str) -> Vec<HintItem> {
                 desc: "回车切换到 OpenAI 登录态".to_string(),
                 completion: format!("/connect {provider_cmd} login {model_prefix}"),
             }];
-            for model in suggested_models(&ConnectProvider::OpenAi) {
+            for model in suggested_login_models(&ConnectProvider::OpenAi) {
                 if model.starts_with(model_prefix) {
                     items.push(HintItem {
                         label: model.to_string(),
@@ -830,6 +868,14 @@ pub fn model_hint_items(paths: &AgentPaths, rest: &str) -> Vec<HintItem> {
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+    if matches!(cfg.provider, ConnectProvider::OpenAi)
+        && matches!(cfg.mode, connect::ConnectMode::CodexLogin)
+    {
+        if !models.iter().any(|m| m == OPENAI_CODEX_LOGIN_LATEST_MODEL) {
+            models.insert(0, OPENAI_CODEX_LOGIN_LATEST_MODEL.to_string());
+        }
+        append_openai_login_codex_tiers(&mut models);
+    }
     if matches!(cfg.provider, ConnectProvider::OpenAi)
         && matches!(cfg.mode, connect::ConnectMode::OpenAIApi)
     {
@@ -1335,20 +1381,30 @@ fn resolve_openai_compatible_model(
     if !matches!(provider, ConnectProvider::OpenAi) {
         return (configured_model.to_string(), None);
     }
-    if let Some((model, effort)) = parse_openai_model_and_effort(configured_model) {
+    if let Some((model, effort)) =
+        parse_openai_model_and_effort(configured_model, OPENAI_CODEX_BASE_MODEL)
+    {
         return (model, Some(effort));
     }
     let model = configured_model.trim().to_ascii_lowercase();
     if matches!(
         model.as_str(),
-        "gpt-5-codex" | "gpt5-codex" | "gpt5.2-codex"
+        "gpt-5.3-codex"
+            | "gpt5.3-codex"
+            | "gpt-5.2-codex"
+            | "gpt-5-codex"
+            | "gpt5.2-codex"
+            | "gpt5-codex"
     ) {
         return (OPENAI_CODEX_BASE_MODEL.to_string(), None);
     }
     (configured_model.to_string(), None)
 }
 
-fn parse_openai_model_and_effort(model: &str) -> Option<(String, OpenAiReasoningEffort)> {
+fn parse_openai_model_and_effort(
+    model: &str,
+    target_base_model: &str,
+) -> Option<(String, OpenAiReasoningEffort)> {
     let normalized = model.trim().to_ascii_lowercase().replace('_', "-");
     if normalized.is_empty() {
         return None;
@@ -1359,31 +1415,33 @@ fn parse_openai_model_and_effort(model: &str) -> Option<(String, OpenAiReasoning
         && is_openai_codex_model(parts[0])
         && let Some(effort) = parse_reasoning_effort(parts[1])
     {
-        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), effort));
+        return Some((target_base_model.to_string(), effort));
     }
 
     if let Some((base, effort)) = normalized.rsplit_once('@')
         && is_openai_codex_model(base)
         && let Some(parsed_effort) = parse_reasoning_effort(effort)
     {
-        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+        return Some((target_base_model.to_string(), parsed_effort));
     }
 
     if let Some((base, effort)) = normalized.rsplit_once(':')
         && is_openai_codex_model(base)
         && let Some(parsed_effort) = parse_reasoning_effort(effort)
     {
-        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+        return Some((target_base_model.to_string(), parsed_effort));
     }
 
     if let Some((base, effort)) = normalized.rsplit_once('/')
         && is_openai_codex_model(base)
         && let Some(parsed_effort) = parse_reasoning_effort(effort)
     {
-        return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+        return Some((target_base_model.to_string(), parsed_effort));
     }
 
     for prefix in [
+        "gpt-5.3-codex-",
+        "gpt5.3-codex-",
         "gpt-5.2-codex-",
         "gpt-5-codex-",
         "gpt5.2-codex-",
@@ -1392,7 +1450,7 @@ fn parse_openai_model_and_effort(model: &str) -> Option<(String, OpenAiReasoning
         if let Some(raw_effort) = normalized.strip_prefix(prefix)
             && let Some(parsed_effort) = parse_reasoning_effort(raw_effort)
         {
-            return Some((OPENAI_CODEX_BASE_MODEL.to_string(), parsed_effort));
+            return Some((target_base_model.to_string(), parsed_effort));
         }
     }
 
@@ -1402,7 +1460,12 @@ fn parse_openai_model_and_effort(model: &str) -> Option<(String, OpenAiReasoning
 fn is_openai_codex_model(model: &str) -> bool {
     matches!(
         model.trim(),
-        "gpt-5.2-codex" | "gpt-5-codex" | "gpt5.2-codex" | "gpt5-codex"
+        "gpt-5.3-codex"
+            | "gpt5.3-codex"
+            | "gpt-5.2-codex"
+            | "gpt-5-codex"
+            | "gpt5.2-codex"
+            | "gpt5-codex"
     )
 }
 
@@ -1416,8 +1479,17 @@ fn parse_reasoning_effort(raw: &str) -> Option<OpenAiReasoningEffort> {
     }
 }
 
-fn codex_cli_model_name(model: &str) -> String {
-    resolve_openai_compatible_model(&ConnectProvider::OpenAi, model).0
+fn codex_cli_model_and_effort(model: &str) -> (String, Option<OpenAiReasoningEffort>) {
+    if let Some((resolved_model, effort)) =
+        parse_openai_model_and_effort(model, OPENAI_CODEX_LOGIN_LATEST_MODEL)
+    {
+        return (resolved_model, Some(effort));
+    }
+    let normalized = model.trim().to_ascii_lowercase();
+    if is_openai_codex_model(&normalized) {
+        return (OPENAI_CODEX_LOGIN_LATEST_MODEL.to_string(), None);
+    }
+    (model.to_string(), None)
 }
 
 async fn chat_via_openai_compatible_api(
@@ -1622,7 +1694,12 @@ async fn chat_via_codex_exec(messages: &[ChatMessage], model: Option<String>) ->
         .arg(&output_file);
 
     if let Some(model) = model {
-        cmd.arg("--model").arg(codex_cli_model_name(&model));
+        let (resolved_model, reasoning_effort) = codex_cli_model_and_effort(&model);
+        cmd.arg("--model").arg(resolved_model);
+        if let Some(effort) = reasoning_effort {
+            cmd.arg("-c")
+                .arg(format!("model_reasoning_effort=\"{}\"", effort.as_str()));
+        }
     }
     cmd.arg(prompt);
 

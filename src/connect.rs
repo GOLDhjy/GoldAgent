@@ -79,7 +79,7 @@ pub fn set_login(paths: &AgentPaths, model: Option<String>) -> Result<ConnectCon
     let mut cfg = load(paths).unwrap_or_default();
     cfg.provider = ConnectProvider::OpenAi;
     cfg.mode = ConnectMode::CodexLogin;
-    cfg.model = model;
+    cfg.model = Some(model.unwrap_or_else(|| "gpt-5.3-codex".to_string()));
     save(paths, &cfg)?;
     Ok(cfg)
 }
@@ -311,6 +311,7 @@ fn looks_like_model_name(s: &str) -> bool {
         || lower.starts_with("claude-")
         || lower.contains("-codex")
         || lower.contains("-mini")
+        || lower.contains("-nano")
         || lower.contains("-flash")
         || lower.contains("-sonnet")
         || lower.contains("-haiku")
