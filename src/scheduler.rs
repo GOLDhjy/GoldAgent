@@ -333,11 +333,12 @@ async fn execute_hook_with_retry(paths: &AgentPaths, hook: &Hook, previous: &str
 }
 
 async fn execute_llm_hook(paths: &AgentPaths, hook: &Hook, prev: &str, curr: &str) {
-    let rules_path = hook.rules_file.as_deref().unwrap_or("");
-    let prompt = match std::fs::read_to_string(rules_path) {
+    let rules_path =
+        resolve_relative_to_target(&hook.target, hook.rules_file.as_deref().unwrap_or(""));
+    let prompt = match std::fs::read_to_string(&rules_path) {
         Ok(content) => content,
         Err(e) => {
-            eprintln!("[hook {}] 读取规则文件失败 {rules_path}: {e}", hook.id);
+            eprintln!("[hook {}] 读取规则文件失败 {}: {e}", hook.id, rules_path.display());
             return;
         }
     };
@@ -400,9 +401,18 @@ async fn fetch_diff(hook: &Hook, prev: &str, curr: &str) -> Option<String> {
 
 fn resolve_report_path(hook: &Hook) -> PathBuf {
     if let Some(ref path) = hook.report_file {
-        PathBuf::from(path)
+        resolve_relative_to_target(&hook.target, path)
     } else {
         PathBuf::from(&hook.target).join("goldagent-review.md")
+    }
+}
+
+fn resolve_relative_to_target(target: &str, path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+    if p.is_absolute() {
+        p
+    } else {
+        PathBuf::from(target).join(p)
     }
 }
 

@@ -1039,6 +1039,11 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
                 println!("当前没有 hook 任务。");
             } else {
                 for hook in hooks {
+                    let mode = if let Some(ref rf) = hook.rules_file {
+                        format!("llm-review rules={rf}")
+                    } else {
+                        format!("command={}", hook.command)
+                    };
                     println!(
                         "{} | {} | {} | target={} | ref={} | interval={}s | retry={} | {}",
                         hook.id,
@@ -1048,7 +1053,7 @@ fn handle_hook_command(paths: &AgentPaths, command: HookCommand) -> Result<()> {
                         hook.reference.as_deref().unwrap_or("-"),
                         hook.interval_secs,
                         hook.retry_max,
-                        hook.command
+                        mode
                     );
                 }
             }
