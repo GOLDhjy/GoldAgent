@@ -1,3 +1,4 @@
+mod chat_actions;
 mod cli;
 mod config;
 mod connect;
@@ -11,6 +12,7 @@ mod skills;
 mod usage;
 
 use anyhow::Result;
+use chat_actions::{execute_local_action, extract_local_action_from_response};
 use clap::Parser;
 use cli::{Cli, Commands, CronCommand, HookCommand, SkillCommand};
 use config::AgentPaths;
@@ -107,7 +109,43 @@ async fn chat_loop(paths: &AgentPaths, model: Option<String>) -> Result<()> {
 
         let _ = memory::capture_explicit_remember(paths, "chat.turn", input)?;
         messages.push(ChatMessage::user(input));
-        let response = client.chat(&messages).await?;
+        let raw_response = client.chat(&messages).await?;
+        let (action, cleaned_response, parse_error) =
+            extract_local_action_from_response(&raw_response);
+        let mut response = cleaned_response;
+
+        if let Some(err) = parse_error {
+            let msg = format!("本地动作解析失败：{err}");
+            response = if response.trim().is_empty() {
+                msg
+            } else {
+                format!("{msg}\n\n{response}")
+            };
+        }
+
+        if let Some(action) = action {
+            match execute_local_action(paths, action) {
+                Ok(action_msg) => {
+                    response = if response.trim().is_empty() {
+                        action_msg
+                    } else {
+                        format!("{action_msg}\n\n{response}")
+                    };
+                }
+                Err(err) => {
+                    let msg = format!("本地动作执行失败：{err}");
+                    response = if response.trim().is_empty() {
+                        msg
+                    } else {
+                        format!("{msg}\n\n{response}")
+                    };
+                }
+            }
+        }
+
+        if response.trim().is_empty() {
+            response = "已执行。".to_string();
+        }
 
         print_assistant_block(&response);
         messages.push(ChatMessage::assistant(response.clone()));
@@ -168,6 +206,23 @@ fn build_system_prompt(
     let mut prompt = String::from("You are GoldAgent, a local assistant.\n");
     if concise {
         prompt.push_str("Use memory carefully and answer concisely.\n");
+    } else {
+        prompt.push_str(
+            "Auto-execution protocol:\n\
+When user asks to perform local operations (cron/hook), emit exactly one control line at the start of your reply:\n\
+[[LOCAL_ACTION:{\"kind\":\"cron_add\",\"schedule\":\"daily@13:00\",\"task\":\"提醒我吃饭\"}]]\n\
+Supported kinds:\n\
+- cron_add {schedule, task, optional name, optional retry_max}\n\
+- cron_list {}\n\
+- cron_remove {id}\n\
+- hook_add_git {repo, task, optional reference, optional interval_secs, optional name, optional retry_max}\n\
+- hook_add_p4 {depot, task, optional interval_secs, optional name, optional retry_max}\n\
+- hook_list {}\n\
+- hook_remove {id}\n\
+Rules:\n\
+- If required fields are missing or ambiguous, ask follow-up questions and DO NOT emit LOCAL_ACTION.\n\
+- If the user clearly requests execution, prefer emitting LOCAL_ACTION rather than giving command suggestions.\n\n",
+        );
     }
     prompt.push_str(&format!(
         "Current backend: {}.\n\
